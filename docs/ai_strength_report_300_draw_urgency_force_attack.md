@@ -1,0 +1,350 @@
+# AI Strength Self-Play Report
+
+- Generated: 2026-02-12 14:49:55
+- Matches: 300
+- Seed: 1337
+- Max rounds per match: 120
+- Decision budget target (ms): 500
+
+## Summary
+
+- Player 1 wins: `116` (38.67%)
+- Player 2 wins: `104` (34.67%)
+- Draws: `80` (26.67%)
+- Avg rounds: `27.76`
+- Decision latency median (ms): `15.499`
+- Decision latency p95 (ms): `75.932`
+- Action replacements (invalid/skip sanitized): `0`
+
+## Outcome Reasons
+
+- `commandant_destroyed`: 215
+- `no_interaction_limit`: 79
+- `opponent_no_units_or_supply`: 5
+- `max_round_cap`: 1
+
+## Replacement Reasons
+
+- none
+
+## Action Type Usage
+
+- `move`: total=19836 | P1=10053 | P2=9783
+- `attack`: total=8602 | P1=4328 | P2=4274
+- `supply_deploy`: total=3809 | P1=1914 | P2=1895
+- `repair`: total=514 | P1=232 | P2=282
+- `skip`: total=80 | P1=55 | P2=25
+
+## Unit Usecase Stats
+
+- `Cloudstriker`: total=13477 | P1=6839 | P2=6638 | supply_deploy=1065 | move=8885 | attack=3527
+- `Artillery`: total=5996 | P1=3069 | P2=2927 | supply_deploy=792 | move=3163 | attack=2041
+- `Crusher`: total=3494 | P1=1801 | P2=1693 | supply_deploy=512 | move=2114 | attack=868
+- `Wingstalker`: total=3014 | P1=1477 | P2=1537 | supply_deploy=492 | move=1886 | attack=636
+- `Earthstalker`: total=2544 | P1=1209 | P2=1335 | supply_deploy=423 | move=1504 | attack=617
+- `Healer`: total=2541 | P1=1275 | P2=1266 | supply_deploy=329 | move=1266 | attack=432 | repair=514
+- `Bastion`: total=1695 | P1=857 | P2=838 | supply_deploy=196 | move=1018 | attack=481
+- `SKIP_SLOT`: total=80 | P1=55 | P2=25 | skip=80
+
+## Match Rows
+
+- Match 1 | seed=9256 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=112.554ms
+- Match 2 | seed=17175 | outcome=draw | rounds=32 | replacements=0 | latency_p95=61.148ms
+- Match 3 | seed=25094 | outcome=win(P1) | rounds=13 | replacements=0 | latency_p95=38.067ms
+- Match 4 | seed=33013 | outcome=win(P2) | rounds=9 | replacements=0 | latency_p95=30.758ms
+- Match 5 | seed=40932 | outcome=win(P2) | rounds=41 | replacements=0 | latency_p95=70.734ms
+- Match 6 | seed=48851 | outcome=win(P2) | rounds=72 | replacements=0 | latency_p95=114.308ms
+- Match 7 | seed=56770 | outcome=draw | rounds=43 | replacements=0 | latency_p95=65.131ms
+- Match 8 | seed=64689 | outcome=win(P1) | rounds=14 | replacements=0 | latency_p95=36.627ms
+- Match 9 | seed=72608 | outcome=draw | rounds=58 | replacements=0 | latency_p95=99.660ms
+- Match 10 | seed=80527 | outcome=win(P2) | rounds=76 | replacements=0 | latency_p95=73.334ms
+- Match 11 | seed=88446 | outcome=win(P1) | rounds=38 | replacements=0 | latency_p95=63.102ms
+- Match 12 | seed=96365 | outcome=win(P1) | rounds=44 | replacements=0 | latency_p95=94.119ms
+- Match 13 | seed=104284 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=109.229ms
+- Match 14 | seed=112203 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=79.806ms
+- Match 15 | seed=120122 | outcome=draw | rounds=37 | replacements=0 | latency_p95=85.816ms
+- Match 16 | seed=128041 | outcome=draw | rounds=37 | replacements=0 | latency_p95=69.825ms
+- Match 17 | seed=135960 | outcome=win(P1) | rounds=18 | replacements=0 | latency_p95=65.281ms
+- Match 18 | seed=143879 | outcome=win(P2) | rounds=37 | replacements=0 | latency_p95=71.792ms
+- Match 19 | seed=151798 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=81.154ms
+- Match 20 | seed=159717 | outcome=win(P2) | rounds=69 | replacements=0 | latency_p95=74.473ms
+- Match 21 | seed=167636 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=44.398ms
+- Match 22 | seed=175555 | outcome=win(P1) | rounds=35 | replacements=0 | latency_p95=92.352ms
+- Match 23 | seed=183474 | outcome=win(P2) | rounds=18 | replacements=0 | latency_p95=29.198ms
+- Match 24 | seed=191393 | outcome=draw | rounds=41 | replacements=0 | latency_p95=53.156ms
+- Match 25 | seed=199312 | outcome=win(P1) | rounds=17 | replacements=0 | latency_p95=106.253ms
+- Match 26 | seed=207231 | outcome=draw | rounds=41 | replacements=0 | latency_p95=71.923ms
+- Match 27 | seed=215150 | outcome=win(P2) | rounds=39 | replacements=0 | latency_p95=51.714ms
+- Match 28 | seed=223069 | outcome=win(P1) | rounds=81 | replacements=0 | latency_p95=107.727ms
+- Match 29 | seed=230988 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=64.332ms
+- Match 30 | seed=238907 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=59.995ms
+- Match 31 | seed=246826 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=40.116ms
+- Match 32 | seed=254745 | outcome=draw | rounds=14 | replacements=0 | latency_p95=109.512ms
+- Match 33 | seed=262664 | outcome=draw | rounds=23 | replacements=0 | latency_p95=77.269ms
+- Match 34 | seed=270583 | outcome=win(P2) | rounds=18 | replacements=0 | latency_p95=47.817ms
+- Match 35 | seed=278502 | outcome=draw | rounds=36 | replacements=0 | latency_p95=105.442ms
+- Match 36 | seed=286421 | outcome=draw | rounds=49 | replacements=0 | latency_p95=96.296ms
+- Match 37 | seed=294340 | outcome=win(P1) | rounds=25 | replacements=0 | latency_p95=79.146ms
+- Match 38 | seed=302259 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=95.416ms
+- Match 39 | seed=310178 | outcome=win(P1) | rounds=24 | replacements=0 | latency_p95=87.253ms
+- Match 40 | seed=318097 | outcome=win(P2) | rounds=9 | replacements=0 | latency_p95=54.947ms
+- Match 41 | seed=326016 | outcome=win(P2) | rounds=59 | replacements=0 | latency_p95=53.755ms
+- Match 42 | seed=333935 | outcome=win(P1) | rounds=15 | replacements=0 | latency_p95=77.206ms
+- Match 43 | seed=341854 | outcome=win(P2) | rounds=53 | replacements=0 | latency_p95=67.743ms
+- Match 44 | seed=349773 | outcome=draw | rounds=29 | replacements=0 | latency_p95=98.085ms
+- Match 45 | seed=357692 | outcome=draw | rounds=38 | replacements=0 | latency_p95=99.316ms
+- Match 46 | seed=365611 | outcome=win(P2) | rounds=76 | replacements=0 | latency_p95=89.610ms
+- Match 47 | seed=373530 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=94.675ms
+- Match 48 | seed=381449 | outcome=win(P2) | rounds=18 | replacements=0 | latency_p95=60.725ms
+- Match 49 | seed=389368 | outcome=win(P2) | rounds=16 | replacements=0 | latency_p95=66.306ms
+- Match 50 | seed=397287 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=27.641ms
+- Match 51 | seed=405206 | outcome=win(P1) | rounds=65 | replacements=0 | latency_p95=79.031ms
+- Match 52 | seed=413125 | outcome=draw | rounds=23 | replacements=0 | latency_p95=45.388ms
+- Match 53 | seed=421044 | outcome=win(P1) | rounds=17 | replacements=0 | latency_p95=78.912ms
+- Match 54 | seed=428963 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=55.148ms
+- Match 55 | seed=436882 | outcome=win(P1) | rounds=18 | replacements=0 | latency_p95=33.144ms
+- Match 56 | seed=444801 | outcome=draw | rounds=41 | replacements=0 | latency_p95=95.518ms
+- Match 57 | seed=452720 | outcome=win(P1) | rounds=16 | replacements=0 | latency_p95=54.857ms
+- Match 58 | seed=460639 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=52.419ms
+- Match 59 | seed=468558 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=52.615ms
+- Match 60 | seed=476477 | outcome=win(P1) | rounds=45 | replacements=0 | latency_p95=72.290ms
+- Match 61 | seed=484396 | outcome=win(P2) | rounds=24 | replacements=0 | latency_p95=65.102ms
+- Match 62 | seed=492315 | outcome=win(P2) | rounds=13 | replacements=0 | latency_p95=143.671ms
+- Match 63 | seed=500234 | outcome=win(P1) | rounds=8 | replacements=0 | latency_p95=61.098ms
+- Match 64 | seed=508153 | outcome=draw | rounds=84 | replacements=0 | latency_p95=94.271ms
+- Match 65 | seed=516072 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=38.469ms
+- Match 66 | seed=523991 | outcome=win(P2) | rounds=13 | replacements=0 | latency_p95=22.308ms
+- Match 67 | seed=531910 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=62.064ms
+- Match 68 | seed=539829 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=47.598ms
+- Match 69 | seed=547748 | outcome=win(P2) | rounds=70 | replacements=0 | latency_p95=42.670ms
+- Match 70 | seed=555667 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=62.551ms
+- Match 71 | seed=563586 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=59.155ms
+- Match 72 | seed=571505 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=72.662ms
+- Match 73 | seed=579424 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=80.240ms
+- Match 74 | seed=587343 | outcome=win(P2) | rounds=17 | replacements=0 | latency_p95=89.775ms
+- Match 75 | seed=595262 | outcome=draw | rounds=30 | replacements=0 | latency_p95=63.923ms
+- Match 76 | seed=603181 | outcome=win(P1) | rounds=62 | replacements=0 | latency_p95=53.968ms
+- Match 77 | seed=611100 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=62.249ms
+- Match 78 | seed=619019 | outcome=draw | rounds=57 | replacements=0 | latency_p95=60.431ms
+- Match 79 | seed=626938 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=55.710ms
+- Match 80 | seed=634857 | outcome=win(P1) | rounds=58 | replacements=0 | latency_p95=52.435ms
+- Match 81 | seed=642776 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=60.979ms
+- Match 82 | seed=650695 | outcome=draw | rounds=32 | replacements=0 | latency_p95=77.125ms
+- Match 83 | seed=658614 | outcome=win(P1) | rounds=5 | replacements=0 | latency_p95=43.177ms
+- Match 84 | seed=666533 | outcome=win(P1) | rounds=20 | replacements=0 | latency_p95=73.926ms
+- Match 85 | seed=674452 | outcome=win(P2) | rounds=27 | replacements=0 | latency_p95=91.985ms
+- Match 86 | seed=682371 | outcome=win(P2) | rounds=30 | replacements=0 | latency_p95=58.861ms
+- Match 87 | seed=690290 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=44.972ms
+- Match 88 | seed=698209 | outcome=win(P1) | rounds=75 | replacements=0 | latency_p95=62.790ms
+- Match 89 | seed=706128 | outcome=win(P1) | rounds=10 | replacements=0 | latency_p95=69.673ms
+- Match 90 | seed=714047 | outcome=draw | rounds=37 | replacements=0 | latency_p95=51.827ms
+- Match 91 | seed=721966 | outcome=win(P2) | rounds=21 | replacements=0 | latency_p95=84.189ms
+- Match 92 | seed=729885 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=92.072ms
+- Match 93 | seed=737804 | outcome=draw | rounds=47 | replacements=0 | latency_p95=82.892ms
+- Match 94 | seed=745723 | outcome=win(P1) | rounds=26 | replacements=0 | latency_p95=85.039ms
+- Match 95 | seed=753642 | outcome=win(P2) | rounds=5 | replacements=0 | latency_p95=60.139ms
+- Match 96 | seed=761561 | outcome=draw | rounds=22 | replacements=0 | latency_p95=48.381ms
+- Match 97 | seed=769480 | outcome=draw | rounds=17 | replacements=0 | latency_p95=107.742ms
+- Match 98 | seed=777399 | outcome=win(P2) | rounds=33 | replacements=0 | latency_p95=55.342ms
+- Match 99 | seed=785318 | outcome=win(P1) | rounds=21 | replacements=0 | latency_p95=42.804ms
+- Match 100 | seed=793237 | outcome=win(P2) | rounds=55 | replacements=0 | latency_p95=63.209ms
+- Match 101 | seed=801156 | outcome=win(P1) | rounds=19 | replacements=0 | latency_p95=78.654ms
+- Match 102 | seed=809075 | outcome=win(P1) | rounds=79 | replacements=0 | latency_p95=71.369ms
+- Match 103 | seed=816994 | outcome=win(P2) | rounds=22 | replacements=0 | latency_p95=87.419ms
+- Match 104 | seed=824913 | outcome=draw | rounds=20 | replacements=0 | latency_p95=48.344ms
+- Match 105 | seed=832832 | outcome=draw | rounds=32 | replacements=0 | latency_p95=71.533ms
+- Match 106 | seed=840751 | outcome=draw | rounds=32 | replacements=0 | latency_p95=54.501ms
+- Match 107 | seed=848670 | outcome=win(P1) | rounds=81 | replacements=0 | latency_p95=53.805ms
+- Match 108 | seed=856589 | outcome=win(P2) | rounds=5 | replacements=0 | latency_p95=68.082ms
+- Match 109 | seed=864508 | outcome=win(P2) | rounds=25 | replacements=0 | latency_p95=48.929ms
+- Match 110 | seed=872427 | outcome=win(P2) | rounds=9 | replacements=0 | latency_p95=114.514ms
+- Match 111 | seed=880346 | outcome=win(P2) | rounds=93 | replacements=0 | latency_p95=60.664ms
+- Match 112 | seed=888265 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=98.305ms
+- Match 113 | seed=896184 | outcome=win(P1) | rounds=8 | replacements=0 | latency_p95=80.051ms
+- Match 114 | seed=904103 | outcome=draw | rounds=48 | replacements=0 | latency_p95=59.857ms
+- Match 115 | seed=912022 | outcome=draw | rounds=17 | replacements=0 | latency_p95=84.252ms
+- Match 116 | seed=919941 | outcome=draw | rounds=79 | replacements=0 | latency_p95=73.861ms
+- Match 117 | seed=927860 | outcome=win(P1) | rounds=19 | replacements=0 | latency_p95=86.938ms
+- Match 118 | seed=935779 | outcome=draw | rounds=23 | replacements=0 | latency_p95=42.949ms
+- Match 119 | seed=943698 | outcome=win(P2) | rounds=15 | replacements=0 | latency_p95=80.096ms
+- Match 120 | seed=951617 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=29.099ms
+- Match 121 | seed=959536 | outcome=win(P1) | rounds=5 | replacements=0 | latency_p95=54.764ms
+- Match 122 | seed=967455 | outcome=win(P1) | rounds=17 | replacements=0 | latency_p95=75.915ms
+- Match 123 | seed=975374 | outcome=win(P1) | rounds=35 | replacements=0 | latency_p95=70.210ms
+- Match 124 | seed=983293 | outcome=win(P1) | rounds=20 | replacements=0 | latency_p95=77.079ms
+- Match 125 | seed=991212 | outcome=draw | rounds=90 | replacements=0 | latency_p95=68.433ms
+- Match 126 | seed=999131 | outcome=win(P2) | rounds=55 | replacements=0 | latency_p95=49.891ms
+- Match 127 | seed=1007050 | outcome=win(P2) | rounds=22 | replacements=0 | latency_p95=74.207ms
+- Match 128 | seed=1014969 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=83.468ms
+- Match 129 | seed=1022888 | outcome=win(P1) | rounds=13 | replacements=0 | latency_p95=67.368ms
+- Match 130 | seed=1030807 | outcome=win(P1) | rounds=15 | replacements=0 | latency_p95=100.448ms
+- Match 131 | seed=1038726 | outcome=win(P1) | rounds=59 | replacements=0 | latency_p95=59.312ms
+- Match 132 | seed=1046645 | outcome=draw | rounds=28 | replacements=0 | latency_p95=61.903ms
+- Match 133 | seed=1054564 | outcome=win(P1) | rounds=15 | replacements=0 | latency_p95=37.474ms
+- Match 134 | seed=1062483 | outcome=win(P1) | rounds=70 | replacements=0 | latency_p95=65.508ms
+- Match 135 | seed=1070402 | outcome=win(P1) | rounds=30 | replacements=0 | latency_p95=43.538ms
+- Match 136 | seed=1078321 | outcome=win(P1) | rounds=10 | replacements=0 | latency_p95=51.681ms
+- Match 137 | seed=1086240 | outcome=win(P1) | rounds=16 | replacements=0 | latency_p95=52.742ms
+- Match 138 | seed=1094159 | outcome=win(P1) | rounds=88 | replacements=0 | latency_p95=72.524ms
+- Match 139 | seed=1102078 | outcome=draw | rounds=27 | replacements=0 | latency_p95=58.588ms
+- Match 140 | seed=1109997 | outcome=draw | rounds=22 | replacements=0 | latency_p95=45.134ms
+- Match 141 | seed=1117916 | outcome=draw | rounds=14 | replacements=0 | latency_p95=65.450ms
+- Match 142 | seed=1125835 | outcome=win(P1) | rounds=48 | replacements=0 | latency_p95=51.539ms
+- Match 143 | seed=1133754 | outcome=win(P2) | rounds=78 | replacements=0 | latency_p95=108.592ms
+- Match 144 | seed=1141673 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=44.558ms
+- Match 145 | seed=1149592 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=39.321ms
+- Match 146 | seed=1157511 | outcome=win(P1) | rounds=16 | replacements=0 | latency_p95=79.950ms
+- Match 147 | seed=1165430 | outcome=draw | rounds=70 | replacements=0 | latency_p95=66.466ms
+- Match 148 | seed=1173349 | outcome=draw | rounds=54 | replacements=0 | latency_p95=63.729ms
+- Match 149 | seed=1181268 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=76.703ms
+- Match 150 | seed=1189187 | outcome=draw | rounds=38 | replacements=0 | latency_p95=80.905ms
+- Match 151 | seed=1197106 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=50.977ms
+- Match 152 | seed=1205025 | outcome=win(P1) | rounds=19 | replacements=0 | latency_p95=82.518ms
+- Match 153 | seed=1212944 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=97.470ms
+- Match 154 | seed=1220863 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=29.342ms
+- Match 155 | seed=1228782 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=87.783ms
+- Match 156 | seed=1236701 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=75.780ms
+- Match 157 | seed=1244620 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=34.569ms
+- Match 158 | seed=1252539 | outcome=win(P1) | rounds=37 | replacements=0 | latency_p95=55.509ms
+- Match 159 | seed=1260458 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=121.329ms
+- Match 160 | seed=1268377 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=48.227ms
+- Match 161 | seed=1276296 | outcome=draw | rounds=32 | replacements=0 | latency_p95=84.112ms
+- Match 162 | seed=1284215 | outcome=draw | rounds=27 | replacements=0 | latency_p95=62.820ms
+- Match 163 | seed=1292134 | outcome=win(P1) | rounds=63 | replacements=0 | latency_p95=96.508ms
+- Match 164 | seed=1300053 | outcome=draw | rounds=49 | replacements=0 | latency_p95=68.099ms
+- Match 165 | seed=1307972 | outcome=draw | rounds=22 | replacements=0 | latency_p95=49.620ms
+- Match 166 | seed=1315891 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=16.280ms
+- Match 167 | seed=1323810 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=142.468ms
+- Match 168 | seed=1331729 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=69.254ms
+- Match 169 | seed=1339648 | outcome=draw | rounds=15 | replacements=0 | latency_p95=68.282ms
+- Match 170 | seed=1347567 | outcome=win(P1) | rounds=66 | replacements=0 | latency_p95=66.872ms
+- Match 171 | seed=1355486 | outcome=draw | rounds=28 | replacements=0 | latency_p95=59.603ms
+- Match 172 | seed=1363405 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=75.065ms
+- Match 173 | seed=1371324 | outcome=draw | rounds=33 | replacements=0 | latency_p95=85.318ms
+- Match 174 | seed=1379243 | outcome=win(P1) | rounds=5 | replacements=0 | latency_p95=40.162ms
+- Match 175 | seed=1387162 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=56.622ms
+- Match 176 | seed=1395081 | outcome=win(P2) | rounds=6 | replacements=0 | latency_p95=76.360ms
+- Match 177 | seed=1403000 | outcome=draw | rounds=52 | replacements=0 | latency_p95=72.078ms
+- Match 178 | seed=1410919 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=64.105ms
+- Match 179 | seed=1418838 | outcome=draw | rounds=28 | replacements=0 | latency_p95=60.296ms
+- Match 180 | seed=1426757 | outcome=win(P1) | rounds=10 | replacements=0 | latency_p95=75.404ms
+- Match 181 | seed=1434676 | outcome=draw | rounds=38 | replacements=0 | latency_p95=60.551ms
+- Match 182 | seed=1442595 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=61.633ms
+- Match 183 | seed=1450514 | outcome=win(P2) | rounds=15 | replacements=0 | latency_p95=56.278ms
+- Match 184 | seed=1458433 | outcome=win(P1) | rounds=48 | replacements=0 | latency_p95=60.083ms
+- Match 185 | seed=1466352 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=33.528ms
+- Match 186 | seed=1474271 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=30.053ms
+- Match 187 | seed=1482190 | outcome=draw | rounds=42 | replacements=0 | latency_p95=71.276ms
+- Match 188 | seed=1490109 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=59.348ms
+- Match 189 | seed=1498028 | outcome=win(P1) | rounds=31 | replacements=0 | latency_p95=80.960ms
+- Match 190 | seed=1505947 | outcome=win(P2) | rounds=21 | replacements=0 | latency_p95=81.729ms
+- Match 191 | seed=1513866 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=48.626ms
+- Match 192 | seed=1521785 | outcome=win(P2) | rounds=33 | replacements=0 | latency_p95=101.521ms
+- Match 193 | seed=1529704 | outcome=draw | rounds=36 | replacements=0 | latency_p95=87.454ms
+- Match 194 | seed=1537623 | outcome=win(P1) | rounds=17 | replacements=0 | latency_p95=62.349ms
+- Match 195 | seed=1545542 | outcome=draw | rounds=21 | replacements=0 | latency_p95=84.006ms
+- Match 196 | seed=1553461 | outcome=win(P2) | rounds=13 | replacements=0 | latency_p95=45.545ms
+- Match 197 | seed=1561380 | outcome=draw | rounds=52 | replacements=0 | latency_p95=69.077ms
+- Match 198 | seed=1569299 | outcome=win(P2) | rounds=89 | replacements=0 | latency_p95=112.300ms
+- Match 199 | seed=1577218 | outcome=win(P1) | rounds=17 | replacements=0 | latency_p95=96.310ms
+- Match 200 | seed=1585137 | outcome=draw | rounds=33 | replacements=0 | latency_p95=99.438ms
+- Match 201 | seed=1593056 | outcome=win(P1) | rounds=16 | replacements=0 | latency_p95=81.207ms
+- Match 202 | seed=1600975 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=33.052ms
+- Match 203 | seed=1608894 | outcome=win(P1) | rounds=26 | replacements=0 | latency_p95=93.338ms
+- Match 204 | seed=1616813 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=48.958ms
+- Match 205 | seed=1624732 | outcome=win(P1) | rounds=15 | replacements=0 | latency_p95=60.510ms
+- Match 206 | seed=1632651 | outcome=win(P2) | rounds=79 | replacements=0 | latency_p95=52.768ms
+- Match 207 | seed=1640570 | outcome=win(P1) | rounds=36 | replacements=0 | latency_p95=69.310ms
+- Match 208 | seed=1648489 | outcome=win(P2) | rounds=17 | replacements=0 | latency_p95=38.452ms
+- Match 209 | seed=1656408 | outcome=draw | rounds=120 | replacements=0 | latency_p95=70.561ms
+- Match 210 | seed=1664327 | outcome=win(P1) | rounds=60 | replacements=0 | latency_p95=116.469ms
+- Match 211 | seed=1672246 | outcome=win(P1) | rounds=24 | replacements=0 | latency_p95=60.600ms
+- Match 212 | seed=1680165 | outcome=win(P1) | rounds=49 | replacements=0 | latency_p95=55.562ms
+- Match 213 | seed=1688084 | outcome=win(P2) | rounds=11 | replacements=0 | latency_p95=70.734ms
+- Match 214 | seed=1696003 | outcome=draw | rounds=25 | replacements=0 | latency_p95=40.664ms
+- Match 215 | seed=1703922 | outcome=win(P2) | rounds=6 | replacements=0 | latency_p95=48.883ms
+- Match 216 | seed=1711841 | outcome=draw | rounds=31 | replacements=0 | latency_p95=76.262ms
+- Match 217 | seed=1719760 | outcome=draw | rounds=46 | replacements=0 | latency_p95=71.975ms
+- Match 218 | seed=1727679 | outcome=win(P1) | rounds=50 | replacements=0 | latency_p95=91.268ms
+- Match 219 | seed=1735598 | outcome=draw | rounds=24 | replacements=0 | latency_p95=53.276ms
+- Match 220 | seed=1743517 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=94.335ms
+- Match 221 | seed=1751436 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=78.434ms
+- Match 222 | seed=1759355 | outcome=win(P1) | rounds=39 | replacements=0 | latency_p95=70.870ms
+- Match 223 | seed=1767274 | outcome=win(P1) | rounds=54 | replacements=0 | latency_p95=37.622ms
+- Match 224 | seed=1775193 | outcome=draw | rounds=41 | replacements=0 | latency_p95=77.237ms
+- Match 225 | seed=1783112 | outcome=win(P1) | rounds=16 | replacements=0 | latency_p95=86.910ms
+- Match 226 | seed=1791031 | outcome=win(P1) | rounds=51 | replacements=0 | latency_p95=69.829ms
+- Match 227 | seed=1798950 | outcome=draw | rounds=28 | replacements=0 | latency_p95=50.126ms
+- Match 228 | seed=1806869 | outcome=win(P1) | rounds=12 | replacements=0 | latency_p95=43.923ms
+- Match 229 | seed=1814788 | outcome=draw | rounds=30 | replacements=0 | latency_p95=87.852ms
+- Match 230 | seed=1822707 | outcome=win(P2) | rounds=49 | replacements=0 | latency_p95=43.165ms
+- Match 231 | seed=1830626 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=76.314ms
+- Match 232 | seed=1838545 | outcome=win(P1) | rounds=13 | replacements=0 | latency_p95=54.415ms
+- Match 233 | seed=1846464 | outcome=win(P2) | rounds=66 | replacements=0 | latency_p95=37.329ms
+- Match 234 | seed=1854383 | outcome=draw | rounds=48 | replacements=0 | latency_p95=67.971ms
+- Match 235 | seed=1862302 | outcome=draw | rounds=20 | replacements=0 | latency_p95=33.428ms
+- Match 236 | seed=1870221 | outcome=draw | rounds=79 | replacements=0 | latency_p95=70.598ms
+- Match 237 | seed=1878140 | outcome=draw | rounds=24 | replacements=0 | latency_p95=81.414ms
+- Match 238 | seed=1886059 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=80.018ms
+- Match 239 | seed=1893978 | outcome=win(P2) | rounds=6 | replacements=0 | latency_p95=76.635ms
+- Match 240 | seed=1901897 | outcome=win(P2) | rounds=14 | replacements=0 | latency_p95=73.710ms
+- Match 241 | seed=1909816 | outcome=win(P2) | rounds=5 | replacements=0 | latency_p95=61.330ms
+- Match 242 | seed=1917735 | outcome=win(P2) | rounds=10 | replacements=0 | latency_p95=60.477ms
+- Match 243 | seed=1925654 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=57.947ms
+- Match 244 | seed=1933573 | outcome=win(P2) | rounds=66 | replacements=0 | latency_p95=61.863ms
+- Match 245 | seed=1941492 | outcome=win(P2) | rounds=18 | replacements=0 | latency_p95=102.028ms
+- Match 246 | seed=1949411 | outcome=win(P1) | rounds=67 | replacements=0 | latency_p95=64.820ms
+- Match 247 | seed=1957330 | outcome=win(P2) | rounds=38 | replacements=0 | latency_p95=37.546ms
+- Match 248 | seed=1965249 | outcome=draw | rounds=44 | replacements=0 | latency_p95=57.670ms
+- Match 249 | seed=1973168 | outcome=win(P1) | rounds=13 | replacements=0 | latency_p95=85.532ms
+- Match 250 | seed=1981087 | outcome=win(P2) | rounds=4 | replacements=0 | latency_p95=36.643ms
+- Match 251 | seed=1989006 | outcome=win(P2) | rounds=17 | replacements=0 | latency_p95=49.644ms
+- Match 252 | seed=1996925 | outcome=win(P1) | rounds=7 | replacements=0 | latency_p95=91.234ms
+- Match 253 | seed=2004844 | outcome=draw | rounds=34 | replacements=0 | latency_p95=121.315ms
+- Match 254 | seed=2012763 | outcome=win(P1) | rounds=9 | replacements=0 | latency_p95=42.703ms
+- Match 255 | seed=2020682 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=65.223ms
+- Match 256 | seed=2028601 | outcome=win(P2) | rounds=5 | replacements=0 | latency_p95=71.805ms
+- Match 257 | seed=2036520 | outcome=draw | rounds=42 | replacements=0 | latency_p95=72.334ms
+- Match 258 | seed=2044439 | outcome=win(P2) | rounds=9 | replacements=0 | latency_p95=80.591ms
+- Match 259 | seed=2052358 | outcome=win(P1) | rounds=77 | replacements=0 | latency_p95=82.488ms
+- Match 260 | seed=2060277 | outcome=win(P2) | rounds=23 | replacements=0 | latency_p95=68.056ms
+- Match 261 | seed=2068196 | outcome=draw | rounds=26 | replacements=0 | latency_p95=114.262ms
+- Match 262 | seed=2076115 | outcome=win(P2) | rounds=67 | replacements=0 | latency_p95=68.894ms
+- Match 263 | seed=2084034 | outcome=draw | rounds=16 | replacements=0 | latency_p95=90.711ms
+- Match 264 | seed=2091953 | outcome=draw | rounds=55 | replacements=0 | latency_p95=57.021ms
+- Match 265 | seed=2099872 | outcome=draw | rounds=33 | replacements=0 | latency_p95=63.860ms
+- Match 266 | seed=2107791 | outcome=draw | rounds=62 | replacements=0 | latency_p95=97.864ms
+- Match 267 | seed=2115710 | outcome=win(P2) | rounds=18 | replacements=0 | latency_p95=52.143ms
+- Match 268 | seed=2123629 | outcome=draw | rounds=34 | replacements=0 | latency_p95=58.234ms
+- Match 269 | seed=2131548 | outcome=win(P2) | rounds=4 | replacements=0 | latency_p95=41.036ms
+- Match 270 | seed=2139467 | outcome=win(P1) | rounds=8 | replacements=0 | latency_p95=47.109ms
+- Match 271 | seed=2147386 | outcome=draw | rounds=31 | replacements=0 | latency_p95=28.551ms
+- Match 272 | seed=2155305 | outcome=win(P2) | rounds=19 | replacements=0 | latency_p95=117.825ms
+- Match 273 | seed=2163224 | outcome=win(P2) | rounds=19 | replacements=0 | latency_p95=76.649ms
+- Match 274 | seed=2171143 | outcome=win(P2) | rounds=13 | replacements=0 | latency_p95=80.887ms
+- Match 275 | seed=2179062 | outcome=draw | rounds=47 | replacements=0 | latency_p95=82.171ms
+- Match 276 | seed=2186981 | outcome=win(P2) | rounds=14 | replacements=0 | latency_p95=79.765ms
+- Match 277 | seed=2194900 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=35.165ms
+- Match 278 | seed=2202819 | outcome=win(P1) | rounds=21 | replacements=0 | latency_p95=30.871ms
+- Match 279 | seed=2210738 | outcome=draw | rounds=58 | replacements=0 | latency_p95=115.576ms
+- Match 280 | seed=2218657 | outcome=win(P2) | rounds=19 | replacements=0 | latency_p95=66.451ms
+- Match 281 | seed=2226576 | outcome=win(P2) | rounds=12 | replacements=0 | latency_p95=57.946ms
+- Match 282 | seed=2234495 | outcome=win(P2) | rounds=22 | replacements=0 | latency_p95=76.209ms
+- Match 283 | seed=2242414 | outcome=win(P1) | rounds=10 | replacements=0 | latency_p95=80.063ms
+- Match 284 | seed=2250333 | outcome=win(P2) | rounds=23 | replacements=0 | latency_p95=67.614ms
+- Match 285 | seed=2258252 | outcome=win(P2) | rounds=17 | replacements=0 | latency_p95=58.488ms
+- Match 286 | seed=2266171 | outcome=win(P1) | rounds=45 | replacements=0 | latency_p95=63.420ms
+- Match 287 | seed=2274090 | outcome=draw | rounds=21 | replacements=0 | latency_p95=103.379ms
+- Match 288 | seed=2282009 | outcome=draw | rounds=18 | replacements=0 | latency_p95=110.427ms
+- Match 289 | seed=2289928 | outcome=win(P2) | rounds=8 | replacements=0 | latency_p95=73.333ms
+- Match 290 | seed=2297847 | outcome=win(P2) | rounds=27 | replacements=0 | latency_p95=181.943ms
+- Match 291 | seed=2305766 | outcome=win(P2) | rounds=78 | replacements=0 | latency_p95=68.506ms
+- Match 292 | seed=2313685 | outcome=win(P2) | rounds=11 | replacements=0 | latency_p95=30.527ms
+- Match 293 | seed=2321604 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=97.472ms
+- Match 294 | seed=2329523 | outcome=win(P1) | rounds=11 | replacements=0 | latency_p95=72.266ms
+- Match 295 | seed=2337442 | outcome=win(P2) | rounds=7 | replacements=0 | latency_p95=31.284ms
+- Match 296 | seed=2345361 | outcome=win(P2) | rounds=23 | replacements=0 | latency_p95=41.549ms
+- Match 297 | seed=2353280 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=71.341ms
+- Match 298 | seed=2361199 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=78.276ms
+- Match 299 | seed=2369118 | outcome=draw | rounds=14 | replacements=0 | latency_p95=71.308ms
+- Match 300 | seed=2377037 | outcome=win(P1) | rounds=6 | replacements=0 | latency_p95=52.803ms

@@ -1,0 +1,383 @@
+# MeowOverMoo - Complete Handoff (3 Non-Puzzle Versions)
+
+Date: 2026-03-21  
+Scope: Windows + macOS native + Linux native branches (non-puzzle line)
+
+Update: 2026-03-25
+- Puzzle variant is now active in a separate workspace and has its own handoff:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative_PuzzleVersion/docs/HANDOFF_PUZZLEVERSION_2026-03-25.md`
+- This file remains the non-puzzle handoff source and is still valid for Windows/macOS/Linux base branches.
+
+Update: 2026-04-13
+- Non-puzzle release is now considered stable across Windows/macOS/Linux baseline branches.
+- No open TODO items remain for the current release baseline.
+
+---
+
+## 1) Branch/Folder Map (Source of Truth)
+
+- Windows source (main):
+  - `/Users/mdc/Documents/MeowOverMoo`
+- macOS native source:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative`
+- Linux native source:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_LinuxNative`
+
+Current package outputs found:
+
+- macOS package:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative_MacPackage_1.0.0.1`
+- Linux package:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_LinuxNative_LinuxPackage_1.0.0.1`
+- Windows package folder was not found at handoff time (expected name from packager script is `MeowOverMoo_WindowsPackage_<version>` under output parent).
+
+Important: this handoff is intentionally **non-puzzle**. Puzzle branch/content is out of scope here.
+
+---
+
+## 2) Architecture Quick Map
+
+Core gameplay/runtime files in each branch:
+
+- `gameRuler.lua` (rules engine + turn/phase enforcement)
+- `gameplay.lua` (state-level orchestration, input routing, AI turn invocation)
+- `uiClass.lua` (button/UI model + focus/input audio)
+- `playGridClass.lua` (grid state, rendering, movement/combat effects)
+- `unitsInfo.lua` (unit stats + combat modifiers)
+- `ai.lua` -> `ai_core.lua` + `ai_decision/*` + `ai_profile.lua` + `ai_config.lua`
+- `stateMachine.lua`, `main.lua`, `globals.lua`
+
+AI decision stack entrypoints:
+
+- `ai.lua` returns `ai_core`
+- `ai_core.lua` mixes in:
+  - `ai_debug`
+  - `ai_profile`
+  - `ai_mobility`
+  - `ai_decision` (modular folder)
+- `ai_decision` is split into:
+  - `turn_state.lua` (phase orchestration)
+  - `execution_flow.lua` (sequence selection + execution)
+  - `priority_pipeline.lua` (priority passes)
+  - `tempo_strategy.lua`, `tactics_attack.lua`, `tactics_defense.lua`, etc.
+
+---
+
+## 3) Cross-Version Sync Status (Critical)
+
+I compared core files across Windows/macOS/Linux.
+
+### Identical across all 3
+
+- `gameRuler.lua`
+- `ai_config.lua`
+- `ai_core.lua`
+- `stateMachine.lua`
+- `gameplay.lua`
+- `uiClass.lua`
+
+### Divergent right now
+
+- `main.lua`
+- `globals.lua`
+
+### Meaningful differences
+
+1. `main.lua`
+- macOS has active LuaJIT safety gate for Apple Silicon (`jit.off()` guard).
+- Windows/Linux have the older commented one-liner.
+
+2. `globals.lua`
+- Expected platform label differences only:
+  - Windows: `"Windows Edition"`
+  - macOS: `"macOS Apple Silicon Edition"`
+  - Linux: `"Native Linux Edition"`
+
+Sync note (2026-03-22):
+- `gameplay.lua` and `uiClass.lua` were re-synced across Windows/macOS/Linux.
+- This includes resize codex cache invalidation and `uiClass:onDisplayResized()`.
+
+---
+
+## 4) Game Rules (Authoritative Technical Summary)
+
+Primary sources:
+
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_config.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/gameRuler.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/unitsInfo.lua`
+
+### 4.1 Contract-level rules (`ai_config.lua` -> `RULE_CONTRACT`)
+
+- Setup obstacles:
+  - count = 4
+  - one per row in rows `3,4,5,6`
+- Commandant placement zones:
+  - player 1: rows 1-2
+  - player 2: rows 7-8
+- Initial deployment count: 1 unit adjacent orthogonally to Commandant
+- Turn actions per turn: 2
+- Actions policy:
+  - mandatory action count = 2
+  - skip only when no legal actions remain
+  - surrounded/stalled unit exception enabled
+  - healer full-HP repair exception enabled
+- Draw policy:
+  - starts counting from turn 10
+  - draw at 20 no-interaction player turns
+  - commandant attacks can reset draw counter
+
+### 4.2 Phase/turn flow (`gameRuler.lua`)
+
+Main phases:
+
+- `setup`
+- `deploy1`
+- `deploy1_units`
+- `deploy2`
+- `deploy2_units`
+- `turn`
+- `gameOver`
+
+Turn sub-phases:
+
+- `commandHub`
+- `actions`
+- (`endTurn` exists in enum, but normal flow uses `nextTurn()` after actions)
+
+Turn transition behavior:
+
+- End of actions -> `nextTurn()`
+- `nextTurn()` switches player, increments round when returning to player 1
+- `finalizeTurnTransition()` always:
+  - sets turn phase to `commandHub`
+  - schedules commandant defense scan/attack
+  - resets turn action counters + unit acted flags
+  - recalculates action availability
+
+### 4.3 Mandatory actions and auto-complete
+
+- `maxActionsPerTurn` is fixed to 2 from contract/constants.
+- `areActionsComplete()` is `currentTurnActions >= maxActionsPerTurn`.
+- Rules engine checks stalled/no-legal-action states and can force-complete turn:
+  - `checkForStalledUnits()`
+  - if active units are stalled and deploy is impossible, it sets actions complete.
+
+Important unit exclusions in action availability count:
+
+- `calculatePossibleActions()` excludes `Commandant` and `Rock` from actionable units.
+
+### 4.4 Commandant defense phase
+
+At start of each player turn:
+
+- commandant scans adjacent cells in clockwise order: right, down, left, up
+- attacks enemy adjacent units (not neutrals)
+- can destroy units and trigger elimination win condition
+- also interacts with draw-counter reset rules
+
+### 4.5 Combat/mechanics essentials
+
+From `unitsInfo.lua` + `gameRuler.lua` behavior:
+
+- Orthogonal movement/attacks baseline.
+- Flying movement can bypass blockers within range; ground movement stops at first blocker.
+- `Cloudstriker` and `Artillery` cannot attack adjacent cells (min range 2).
+- `Cloudstriker` requires line-of-sight (blocked by adjacent unit in direction).
+- `Artillery` can attack through blockers (no LoS stop behavior).
+- Damage modifiers:
+  - `Crusher` +1 vs `Commandant`
+  - `Wingstalker` +1 vs flying
+  - `Cloudstriker` +1 vs `Commandant` and `Rock`
+  - `Artillery` +1 vs `Commandant` and `Rock`
+  - `Earthstalker` +2 vs non-flying non-Commandant non-Rock
+  - `Bastion` takes -1 melee damage (not from Cloudstriker/Artillery)
+
+### 4.6 Win/loss/draw semantics
+
+- `lastVictoryReason = "commandant"` when Commandant is destroyed.
+- Elimination win if opponent has no units left.
+- Draw if no-interaction counter reaches configured limit.
+
+---
+
+## 5) How AI Works (Detailed Practical Summary)
+
+Primary sources:
+
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_core.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_decision/turn_state.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_decision/execution_flow.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_decision/priority_pipeline.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_profile.lua`
+- `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_config.lua`
+
+### 5.1 Runtime entry path
+
+1. `gameplay.update()` checks if AI should process this frame.
+2. In single player, AI runs only when `phaseInfo.currentPlayer == gameRuler.aiPlayerNumber` and no animations are in progress.
+3. It calls `aiPlayer:handleAITurn(phaseInfo, grid)`.
+
+### 5.2 Per-phase AI behavior (`handleAITurn`)
+
+- `setup`: places neutral rocks automatically
+- `deploy1/deploy2`: places Commandant
+- `deploy*_units`: initial deployment near Commandant
+- `turn/actions`: computes best sequence, then executes it
+- `turn/commandHub`: intentionally skipped in AI logic (commandant defense is handled by rules engine turn transition)
+
+### 5.3 Action sequence planning (`getBestSequence`)
+
+- Decision budget target from contract (default 500 ms).
+- Max actions pulled from rules contract (2).
+- Calls `findBestAiSequance(state)` for core candidate sequence.
+- Applies sanitization against live-state legality.
+- Optional verifier pass can replace sequence if evaluated better and guard conditions pass.
+- Records determinism/perf observations.
+
+### 5.4 Priority pipeline (`findBestAiSequance`)
+
+- Uses ordered priority passes.
+- Explicit comments show:
+  - `Priority 00`: immediate winning lines
+  - ... many tactical/defensive/offensive priorities ...
+  - `Priority 38`: **mandatory legal fallback**, and only then skip/pass if no legal actions remain
+- This is the key “mandatory action” compliance layer for AI behavior.
+
+### 5.5 Determinism and profile system
+
+- AI profile alias system exists (`base`, `burt`, `maggie`, `marge`, `homer`, `burns`).
+- Randomizer tie-break has `DETERMINISTIC = true` in config.
+- `ai_profile` currently enforces locked profile behavior (`fixed`) during adaptive updates.
+- `burns` supports dynamic alias switching logic, but still deterministic under current config.
+
+### 5.6 Important AI safety characteristics
+
+- Sequence generation and execution respect legal-action checks.
+- Fallback logic avoids skipping while legal moves are still available.
+- Decision pipeline includes defense-first/hub-threat logic, draw-urgency pressure, and strategy verifier guardrails.
+
+---
+
+## 6) Packaging Quickstart (Canonical, 3 Versions)
+
+Use the wrapper scripts first (`.bat` / `.sh`). They are the canonical entrypoints.
+
+### Windows fused package (run on Windows)
+
+- Source root:
+  - `/Users/mdc/Documents/MeowOverMoo`
+- Run from that folder:
+  - `MAKE_WINDOWS_PACKAGE.bat` -> test package folder
+  - `MAKE_WINDOWS_PACKAGE_TEST_ZIP.bat` -> test package folder + zip
+  - `MAKE_WINDOWS_PACKAGE_RELEASE.bat` -> release package folder + zip, strips `steam_appid.txt`
+- Runtime prerequisite:
+  - `LOVE_11_5_WIN64_RUNTIME_DROP` must exist in the same root.
+
+### macOS native package (run on macOS)
+
+- Source root:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative`
+- Run from that folder:
+  - `./MAKE_MAC_PACKAGE.sh` -> test package
+  - `./MAKE_MAC_PACKAGE_RELEASE.sh` -> release package, strips `steam_appid.txt`
+- Runtime prerequisites:
+  - `LOVE_GITHUB_MACOS_ARM64_RUNTIME_DROP`
+  - `LOVE_GITHUB_MACOS_ARM64_SOURCE_DROP`
+
+### Linux native package (run on Linux / Steam Deck)
+
+- Source root:
+  - `/Users/mdc/Documents/New project/MeowOverMoo_LinuxNative`
+- Run from that folder:
+  - `./MAKE_LINUX_PACKAGE.sh` -> test package
+  - `./MAKE_LINUX_PACKAGE_RELEASE.sh` -> release package, strips `steam_appid.txt`
+- Runtime prerequisite:
+  - `LOVE_11_5_LINUX_RUNTIME_DROP`
+
+### Backend scripts used by wrappers
+
+- Windows wrapper -> `scripts/build_fused_windows_package.py`
+- macOS wrapper -> `scripts/build_native_macos_package.py`
+- Linux wrapper -> `scripts/build_native_linux_package.py`
+- `package_fused_windows_prep.py` is not part of the active packaging flow.
+
+---
+
+## 7) Smoke/Regression Script Set
+
+Available in all three source trees under `scripts/`:
+
+- `lua scripts/input_smoke.lua`
+- `lua scripts/resume_smoke.lua`
+- `lua scripts/ui_consistency_smoke.lua`
+- `lua scripts/ai_regression.lua`
+- `lua scripts/steam_runtime_smoke.lua`
+- `lua scripts/steam_online_smoke.lua`
+- `lua scripts/steam_elo_smoke.lua`
+
+Recommended minimum after gameplay/UI/AI edits:
+
+1. `input_smoke`
+2. `ui_consistency_smoke`
+3. `ai_regression`
+4. platform package build script
+
+---
+
+## 8) Release Status (2026-04-13)
+
+1. **Stability**
+- Current non-puzzle release baseline is stable.
+- Core gameplay/UI/AI smoke and regression checks are green in the current handoff cycle.
+
+2. **Open TODO / blocking items**
+- None for the active release baseline.
+
+3. **Operational guardrails (still valid)**
+- Keep gameplay rules and AI legality in sync through `RULE_CONTRACT` + rules engine behavior.
+- Keep cross-version mirroring discipline (Windows/macOS/Linux), except intentional platform deltas in `main.lua`/`globals.lua`.
+
+---
+
+## 9) Fast Restart Checklist (New Thread / New Model)
+
+1. Read this file fully.
+2. Open these first:
+   - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/gameRuler.lua`
+   - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/gameplay.lua`
+   - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/uiClass.lua`
+   - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_config.lua`
+   - `/Users/mdc/Documents/New project/MeowOverMoo_MacNative/ai_decision/priority_pipeline.lua`
+3. Compare against Windows for drift before editing (as of 2026-03-22, `gameplay.lua`/`uiClass.lua` are synced):
+   - `/Users/mdc/Documents/MeowOverMoo/gameplay.lua`
+   - `/Users/mdc/Documents/MeowOverMoo/uiClass.lua`
+4. Decide sync strategy first (keep intentional platform deltas only).
+5. Apply change in one branch, mirror to the other two, then run smoke scripts + package.
+
+---
+
+## 10) Copy/Paste Restart Prompt (for another model)
+
+Use this as the first message in a fresh thread:
+
+```text
+You are resuming MeowOverMoo non-puzzle development.
+Read this handoff first:
+/Users/mdc/Documents/New project/HANDOFF_3_VERSIONS_NON_PUZZLE_2026-03-21.md
+
+Context:
+- 3 active non-puzzle sources:
+  - Windows: /Users/mdc/Documents/MeowOverMoo
+  - macOS: /Users/mdc/Documents/New project/MeowOverMoo_MacNative
+  - Linux: /Users/mdc/Documents/New project/MeowOverMoo_LinuxNative
+- Focus on keeping gameplay rules and AI mandatory-action behavior aligned.
+- Before coding, summarize cross-version drift and list exactly which files you will touch.
+- After edits, mirror equivalent fixes across all 3 versions unless the difference is intentionally platform-specific.
+- Run smoke scripts and report results.
+
+Priority technical focus:
+1) game rules integrity in gameRuler
+2) AI legality and fallback behavior in ai_decision pipeline
+3) mouse/keyboard parity for UI hover/focus/sound
+```

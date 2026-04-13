@@ -1,0 +1,8 @@
+{
+  "runtime_tag": "main@7d41f3ad30f4a171140f8b2ff53e534add018bb4",
+  "source_tag": "main@7d41f3ad30f4a171140f8b2ff53e534add018bb4",
+  "runtime_artifact": "love.app",
+  "upstream_ci_artifact_name": "love-macos",
+  "upstream_ci_archive_name": "love-macos.zip",
+  "notes": "Pinned to the official LOVE main-branch CI artifact/source revision that includes the macOS Metal test path. Download the artifact for commit 7d41f3ad30f4a171140f8b2ff53e534add018bb4 from the official love2d/love GitHub Actions run, unzip love-macos.zip, and drop love.app into LOVE_GITHUB_MACOS_ARM64_RUNTIME_DROP."
+}

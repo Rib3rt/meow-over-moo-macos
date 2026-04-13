@@ -1,0 +1,114 @@
+"Action Manifest"
+{
+	"configurations"
+	{
+		"controller_xboxone"
+		{
+			"0"
+			{
+				"path" "steam_input_xbox_controller.vdf"
+			}
+		}
+		"controller_xbox360"
+		{
+			"0"
+			{
+				"path" "steam_input_xbox360_controller.vdf"
+			}
+		}
+		"controller_xboxelite"
+		{
+			"0"
+			{
+				"path" "steam_input_xboxelite_controller.vdf"
+			}
+		}
+		"controller_ps4"
+		{
+			"0"
+			{
+				"path" "steam_input_ps4_controller.vdf"
+			}
+		}
+		"controller_ps5"
+		{
+			"0"
+			{
+				"path" "steam_input_ps5_controller.vdf"
+			}
+		}
+		"controller_switch_pro"
+		{
+			"0"
+			{
+				"path" "steam_input_switch_pro_controller.vdf"
+			}
+		}
+		"controller_generic"
+		{
+			"0"
+			{
+				"path" "steam_input_generic_controller.vdf"
+			}
+		}
+		"controller_neptune"
+		{
+			"0"
+			{
+				"path" "steam_input_neptune_controller.vdf"
+			}
+		}
+		"controller_steamcontroller_gordon"
+		{
+			"0"
+			{
+				"path" "steam_input_steam_controller.vdf"
+			}
+		}
+	}
+	"actions"
+	{
+		"global_controls"
+		{
+			"title"		"Global Controls"
+			"legacy_set"		"0"
+			"StickPadGyro"
+			{
+				"navigate"
+				{
+					"title"		"Navigate"
+					"input_mode"		"joystick_move"
+				}
+				"page_scroll"
+				{
+					"title"		"Page Scroll"
+					"input_mode"		"joystick_move"
+				}
+			}
+			"Button"
+			{
+				"confirm"		"Confirm"
+				"cancel"		"Cancel"
+				"alt_confirm"		"Alternate Confirm"
+				"context_toggle"		"Context Toggle"
+				"codex_toggle"		"Codex Toggle"
+				"tab_left"		"Tab Left"
+				"tab_right"		"Tab Right"
+				"nav_up"		"Navigate Up"
+				"nav_down"		"Navigate Down"
+				"nav_left"		"Navigate Left"
+				"nav_right"		"Navigate Right"
+				"page_up"		"Page Up"
+				"page_down"		"Page Down"
+			}
+		}
+	}
+	"localization"
+	{
+		"english"
+		{
+			"title"		"Meow Over Moo Controls"
+			"description"		"Official controller layout for Meow Over Moo."
+		}
+	}
+}
