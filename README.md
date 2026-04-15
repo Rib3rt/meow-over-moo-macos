@@ -10,6 +10,30 @@ macOS native non-puzzle release branch of **Meow Over Moo** (Apple Silicon targe
 
 See `KNOWN_ISSUES.md` for the current snapshot.
 
+## Scenario Mode Status (2026-04-15)
+
+- Feature is build-time gated by `SETTINGS.FEATURES.SCENARIO_MODE`.
+- Main menu entry: `PLAY SCENARIO` (first button when scenario mode is enabled).
+- Dedicated flow: scenario list -> scenario gameplay (no setup/faction/supply flow).
+- Scenario list includes `EDITOR` entrypoint for the dedicated scenario editor screen.
+- Current baseline content: `scenarios/P001.lua` only, with max `3` turns.
+- Scenario attempts are runtime-only for now (reset on app restart).
+- Scenario end flow uses scenario result messages (`SOLVED` / `FAILED ATTEMPT`) with `BACK`/`RETRY`.
+- Editor simulation launches from the current editor grid and round limit.
+- Editor simulation pre-checks are currently minimal by design:
+  - at least one Blue unit on board
+  - one Red Commandant on board
+- Editor log panel remains unchanged when launching simulation and after returning from simulation.
+- In editor, Red Commandant cannot be cycled, and `Commandant` is excluded from generic unit cycling.
+
+## Scenario Mode Isolation Rule
+
+All current and future changes for scenario mode must stay isolated to scenario mode only.
+
+- Any new feature, UI, rule, audio, or flow for scenario mode must be gated by `GAME.MODE.SCENARIO`.
+- Standard modes (single player, AI vs AI, online) must keep existing behavior unchanged.
+- If a change cannot be isolated safely, do not merge it into this branch until isolation is implemented.
+
 ## Requirements
 
 - macOS on Apple Silicon

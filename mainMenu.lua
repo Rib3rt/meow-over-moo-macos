@@ -22,11 +22,13 @@ local navigationMode = "keyboard" -- "keyboard" or "mouse" for highlight logic
 local pendingRemotePlayActivePrompt = false
 local selectEnabledButton
 local ensureValidButtonSelection
+local triggerSelectedButton
 
 -- Match the UI colors with the faction select and gameplay screens
 local UI_COLORS = uiTheme.COLORS
 local backgroundShader = nil
 local DISABLED_BUTTON_COLOR = uiTheme.BUTTON_VARIANTS.disabled.base
+local SCENARIO_FEATURE_ENABLED = SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_MODE == true
 
 local function ensureBackgroundShader()
     if backgroundShader then
@@ -259,6 +261,22 @@ local function getButtonHoverColor(button)
     return DISABLED_BUTTON_COLOR
 end
 
+local function getButtonIdentity(button)
+    if not button then
+        return nil
+    end
+    return button.id or button.text
+end
+
+local function findHoveredButton(x, y)
+    for index, button in ipairs(buttonOrder) do
+        if isMouseOverButton(button, x, y) then
+            return button, index
+        end
+    end
+    return nil, nil
+end
+
 local function updateOnlineButtonAvailability()
     if not uiButtons then
         return
@@ -340,6 +358,8 @@ local function startNewModeFlow(mode, localVariant)
 
     GAME.CURRENT.MODE = mode
     GAME.CURRENT.LOCAL_MATCH_VARIANT = localVariant or "couch"
+    GAME.CURRENT.SCENARIO = nil
+    GAME.CURRENT.SCENARIO_REQUESTED_MODE = nil
     GAME.CURRENT.PENDING_RESUME_SNAPSHOT = nil
     GAME.CURRENT.RESUME_RESTART_NOTICE = nil
     resetOnlineRuntimeForLocalModes()
@@ -463,6 +483,8 @@ local function continueModeFromResume(mode)
 
     GAME.CURRENT.MODE = mode
     GAME.CURRENT.LOCAL_MATCH_VARIANT = "couch"
+    GAME.CURRENT.SCENARIO = nil
+    GAME.CURRENT.SCENARIO_REQUESTED_MODE = nil
     GAME.CURRENT.PENDING_RESUME_SNAPSHOT = envelope.snapshot
     resetOnlineRuntimeForLocalModes()
     stateMachineRef.changeState("gameplay")
@@ -506,6 +528,13 @@ local function startLocalMultiplayerFromMenu()
     end
 
     startModeWithResumePrompt(GAME.MODE.MULTYPLAYER_LOCAL)
+end
+
+local function startScenarioModeFromMenu()
+    if not stateMachineRef then
+        return
+    end
+    stateMachineRef.changeState("scenarioSelect")
 end
 
 -- Add this function to update visual state of buttons based on keyboard selection
@@ -557,68 +586,50 @@ function mainMenu.enter(stateMachine)
     local pendingMainMenuNotice = nil
     
     -- Initialize menu buttons with proper styling
-    uiButtons = {
-        playSingle = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 100,
-            y = 180,
+    local buttonX = SETTINGS.DISPLAY.WIDTH / 2 - 100
+    local nextButtonY = 180
+    local function allocButtonY()
+        local current = nextButtonY
+        nextButtonY = nextButtonY + 70
+        return current
+    end
+    local function createButton(buttonId, textValue, enabledValue)
+        return {
+            id = buttonId,
+            x = buttonX,
+            y = allocButtonY(),
             width = 200,
             height = 50,
-            text = "Single Player",
-            enabled = true,
-            currentColor = UI_COLORS.button,
-            hoverColor = UI_COLORS.buttonHover,
-            pressedColor = UI_COLORS.buttonPressed
-        },
-        playLocal = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 100,
-            y = 250,
-            width = 200,
-            height = 50,
-            text = "Local Multiplayer",
-            enabled = true,
-            currentColor = UI_COLORS.button,
-            hoverColor = UI_COLORS.buttonHover,
-            pressedColor = UI_COLORS.buttonPressed
-        },
-        playOnline = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 100,
-            y = 320,
-            width = 200,
-            height = 50,
-            text = "Online Multiplayer",
-            enabled = false,
-            currentColor = UI_COLORS.button,
-            hoverColor = UI_COLORS.buttonHover,
-            pressedColor = UI_COLORS.buttonPressed
-        },
-        playLeaderboard = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 100,
-            y = 390,
-            width = 200,
-            height = 50,
-            text = "Leaderboard",
-            enabled = false,
-            currentColor = UI_COLORS.button,
-            hoverColor = UI_COLORS.buttonHover,
-            pressedColor = UI_COLORS.buttonPressed
-        },
-        quit = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 100,
-            y = 460,
-            width = 200,
-            height = 50,
-            text = "Quit",
-            enabled = true,
+            text = textValue,
+            enabled = enabledValue ~= false,
             currentColor = UI_COLORS.button,
             hoverColor = UI_COLORS.buttonHover,
             pressedColor = UI_COLORS.buttonPressed
         }
-    }
+    end
+
+    uiButtons = {}
+    if SCENARIO_FEATURE_ENABLED then
+        uiButtons.playScenario = createButton("playScenario", "PLAY SCENARIO", true)
+    end
+    uiButtons.playSingle = createButton("playSingle", "Single Player", true)
+    uiButtons.playLocal = createButton("playLocal", "Local Multiplayer", true)
+    uiButtons.playOnline = createButton("playOnline", "Online Multiplayer", false)
+    uiButtons.playLeaderboard = createButton("playLeaderboard", "Leaderboard", false)
+    uiButtons.quit = createButton("quit", "Quit", true)
 
     initializeRandomSeed()
 
     -- Initialize button order for keyboard navigation
-    buttonOrder = {uiButtons.playSingle, uiButtons.playLocal, uiButtons.playOnline, uiButtons.playLeaderboard, uiButtons.quit}
+    buttonOrder = {}
+    if uiButtons.playScenario then
+        buttonOrder[#buttonOrder + 1] = uiButtons.playScenario
+    end
+    buttonOrder[#buttonOrder + 1] = uiButtons.playSingle
+    buttonOrder[#buttonOrder + 1] = uiButtons.playLocal
+    buttonOrder[#buttonOrder + 1] = uiButtons.playOnline
+    buttonOrder[#buttonOrder + 1] = uiButtons.playLeaderboard
+    buttonOrder[#buttonOrder + 1] = uiButtons.quit
     navigationMode = "keyboard"
 
     updateOnlineButtonAvailability()
@@ -628,9 +639,10 @@ function mainMenu.enter(stateMachine)
     ensureValidButtonSelection()
     updateButtonSelection()
 
-    -- Automatically position the cursor over the Single Player button
-    local buttonCenterX = (uiButtons.playSingle.x + uiButtons.playSingle.width / 2) * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETX
-    local buttonCenterY = (uiButtons.playSingle.y + uiButtons.playSingle.height / 2) * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETY
+    -- Automatically position the cursor over the first menu button
+    local initialButton = buttonOrder[1] or uiButtons.playSingle
+    local buttonCenterX = (initialButton.x + initialButton.width / 2) * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETX
+    local buttonCenterY = (initialButton.y + initialButton.height / 2) * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETY
     love.mouse.setPosition(buttonCenterX, buttonCenterY)
 
     -- Trigger the mousemoved handler to update hover state
@@ -771,11 +783,9 @@ function mainMenu.draw()
     drawTitle("MEOW OVER MOO!", 0, 60, SETTINGS.DISPLAY.WIDTH)
 
     if uiButtons then
-        drawButton(uiButtons.playSingle)
-        drawButton(uiButtons.playLocal)
-        drawButton(uiButtons.playOnline)
-        drawButton(uiButtons.playLeaderboard)
-        drawButton(uiButtons.quit)
+        for _, button in ipairs(buttonOrder) do
+            drawButton(button)
+        end
 
         local footerText = "Copyright Flipped Cat - Version " .. tostring(VERSION)
         if PLATFORM_BUILD_LABEL and PLATFORM_BUILD_LABEL ~= "" then
@@ -828,54 +838,27 @@ function mainMenu.mousemoved(x, y, dx, dy, istouch)
 
     navigationMode = "mouse"
 
-    -- Update button hover states with proper hover colors
     -- Track previous hover state for sound (before resetting colors)
     local previousHover = nil
-    if uiButtons and uiButtons.playSingle and uiButtons.playSingle.currentColor == uiButtons.playSingle.hoverColor then
-        previousHover = "playSingle"
-    elseif uiButtons and uiButtons.playLocal and uiButtons.playLocal.currentColor == uiButtons.playLocal.hoverColor then
-        previousHover = "playLocal"
-    elseif uiButtons and uiButtons.playOnline and uiButtons.playOnline.currentColor == uiButtons.playOnline.hoverColor then
-        previousHover = "playOnline"
-    elseif uiButtons and uiButtons.playLeaderboard and uiButtons.playLeaderboard.currentColor == uiButtons.playLeaderboard.hoverColor then
-        previousHover = "playLeaderboard"
-    elseif uiButtons and uiButtons.quit and uiButtons.quit.currentColor == uiButtons.quit.hoverColor then
-        previousHover = "quit"
-    end
-
-    -- Reset all button colors first
-    if uiButtons then
-        for i, button in ipairs(buttonOrder) do
-            button.currentColor = getButtonBaseColor(button)
+    for _, candidate in ipairs(buttonOrder) do
+        if isButtonEnabled(candidate) and candidate.currentColor == (candidate.hoverColor or UI_COLORS.buttonHover) then
+            previousHover = getButtonIdentity(candidate)
+            break
         end
     end
 
-    -- Check if mouse is over any button and update its state
+    for _, candidate in ipairs(buttonOrder) do
+        candidate.currentColor = getButtonBaseColor(candidate)
+    end
+
     local currentHover = nil
-    if uiButtons and isMouseOverButton(uiButtons.playSingle, transformedX, transformedY) then
-        uiButtons.playSingle.currentColor = uiButtons.playSingle.hoverColor
-        selectedButtonIndex = 1  -- Update selected button index
-        currentHover = "playSingle"
-    elseif uiButtons and isMouseOverButton(uiButtons.playLocal, transformedX, transformedY) then
-        uiButtons.playLocal.currentColor = uiButtons.playLocal.hoverColor
-        selectedButtonIndex = 2  -- Update selected button index
-        currentHover = "playLocal"
-    elseif uiButtons and isMouseOverButton(uiButtons.playOnline, transformedX, transformedY) then
-        selectedButtonIndex = 3
-        if isButtonEnabled(uiButtons.playOnline) then
-            uiButtons.playOnline.currentColor = getButtonHoverColor(uiButtons.playOnline)
-            currentHover = "playOnline"
+    local hoveredButton, hoveredIndex = findHoveredButton(transformedX, transformedY)
+    if hoveredButton then
+        selectedButtonIndex = hoveredIndex
+        if isButtonEnabled(hoveredButton) then
+            hoveredButton.currentColor = getButtonHoverColor(hoveredButton)
+            currentHover = getButtonIdentity(hoveredButton)
         end
-    elseif uiButtons and isMouseOverButton(uiButtons.playLeaderboard, transformedX, transformedY) then
-        selectedButtonIndex = 4
-        if isButtonEnabled(uiButtons.playLeaderboard) then
-            uiButtons.playLeaderboard.currentColor = getButtonHoverColor(uiButtons.playLeaderboard)
-            currentHover = "playLeaderboard"
-        end
-    elseif uiButtons and isMouseOverButton(uiButtons.quit, transformedX, transformedY) then
-        uiButtons.quit.currentColor = getButtonHoverColor(uiButtons.quit)
-        selectedButtonIndex = 5
-        currentHover = "quit"
     else
         -- If mouse isn't over any button, maintain keyboard selection highlight only when in keyboard mode
         updateButtonSelection()
@@ -901,71 +884,14 @@ function mainMenu.mousepressed(x, y, button, istouch, presses)
             return
         end
 
-        -- Handle button clicks and set hover color if still hovering
-        if isMouseOverButton(buttons.playLocal, transformedX, transformedY) then
-            playClickSound()
-            buttons.playLocal.currentColor = getButtonHoverColor(buttons.playLocal)
-
-            if stateMachineRef then
-                startLocalMultiplayerFromMenu()
-            end
-            return
-        elseif isMouseOverButton(buttons.playOnline, transformedX, transformedY) then
-            if not isButtonEnabled(buttons.playOnline) then
-                if hasActiveRemotePlaySession() then
-                    showRemotePlayActivePrompt()
-                end
-                return
-            end
-            playClickSound()
-            buttons.playOnline.currentColor = getButtonHoverColor(buttons.playOnline)
-
-            if stateMachineRef then
-                GAME.CURRENT.MODE = GAME.MODE.MULTYPLAYER_NET
-                stateMachineRef.changeState("onlineLobby")
-            end
-            return
-        elseif isMouseOverButton(buttons.playLeaderboard, transformedX, transformedY) then
-            if not isButtonEnabled(buttons.playLeaderboard) then
-                return
-            end
-            playClickSound()
-            buttons.playLeaderboard.currentColor = getButtonHoverColor(buttons.playLeaderboard)
-
-            if stateMachineRef then
-                stateMachineRef.changeState("onlineLeaderboard")
-            end
-            return
-        elseif isMouseOverButton(buttons.playSingle, transformedX, transformedY) then
-            playClickSound()
-            buttons.playSingle.currentColor = getButtonHoverColor(buttons.playSingle)
-
-            startModeWithResumePrompt(GAME.MODE.SINGLE_PLAYER)
-            return
-        elseif isMouseOverButton(buttons.quit, transformedX, transformedY) then
-            playClickSound()
-            buttons.quit.currentColor = getButtonHoverColor(buttons.quit)
-
-            ConfirmDialog.show(
-                "Quit the game?",
-                function()
-                    love.event.quit()
-                end,
-                function() end
-            )
+        local hoveredButton = findHoveredButton(transformedX, transformedY)
+        if hoveredButton then
+            triggerSelectedButton(hoveredButton)
             return
         end
 
-        if not isMouseOverButton(buttons.playLocal, transformedX, transformedY) and
-           not isMouseOverButton(buttons.playOnline, transformedX, transformedY) and
-           not isMouseOverButton(buttons.playLeaderboard, transformedX, transformedY) and
-           not isMouseOverButton(buttons.playSingle, transformedX, transformedY) and
-           not isMouseOverButton(buttons.quit, transformedX, transformedY) then
-            buttons.playLocal.currentColor = getButtonBaseColor(buttons.playLocal)
-            buttons.playOnline.currentColor = getButtonBaseColor(buttons.playOnline)
-            buttons.playLeaderboard.currentColor = getButtonBaseColor(buttons.playLeaderboard)
-            buttons.playSingle.currentColor = getButtonBaseColor(buttons.playSingle)
-            buttons.quit.currentColor = getButtonBaseColor(buttons.quit)
+        for _, candidate in ipairs(buttonOrder) do
+            candidate.currentColor = getButtonBaseColor(candidate)
         end
     end
 end
@@ -984,47 +910,49 @@ function mainMenu.mousereleased(x, y, button, istouch, presses)
         return
     end
 
-    if isMouseOverButton(buttons.playLocal, transformedX, transformedY) then
-        buttons.playLocal.currentColor = getButtonHoverColor(buttons.playLocal)
-    elseif isMouseOverButton(buttons.playOnline, transformedX, transformedY) and isButtonEnabled(buttons.playOnline) then
-        buttons.playOnline.currentColor = getButtonHoverColor(buttons.playOnline)
-    elseif isMouseOverButton(buttons.playLeaderboard, transformedX, transformedY) and isButtonEnabled(buttons.playLeaderboard) then
-        buttons.playLeaderboard.currentColor = getButtonHoverColor(buttons.playLeaderboard)
-    elseif isMouseOverButton(buttons.playSingle, transformedX, transformedY) then
-        buttons.playSingle.currentColor = getButtonHoverColor(buttons.playSingle)
-    elseif isMouseOverButton(buttons.quit, transformedX, transformedY) then
-        buttons.quit.currentColor = getButtonHoverColor(buttons.quit)
+    local hoveredButton = findHoveredButton(transformedX, transformedY)
+    if hoveredButton and isButtonEnabled(hoveredButton) then
+        hoveredButton.currentColor = getButtonHoverColor(hoveredButton)
     end
 end
 
-local function triggerSelectedButton(selectedButton)
+triggerSelectedButton = function(selectedButton)
     if not selectedButton or not uiButtons then
-        return
+        return false
     end
 
     local buttons = uiButtons
 
-    playClickSound()
+    if selectedButton == buttons.playOnline and not isButtonEnabled(buttons.playOnline) then
+        if hasActiveRemotePlaySession() then
+            showRemotePlayActivePrompt()
+        end
+        return true
+    end
 
-    if selectedButton == buttons.playLocal then
+    if selectedButton == buttons.playLeaderboard and not isButtonEnabled(buttons.playLeaderboard) then
+        return true
+    end
+
+    if not isButtonEnabled(selectedButton) then
+        return true
+    end
+
+    playClickSound()
+    selectedButton.currentColor = getButtonHoverColor(selectedButton)
+
+    if buttons.playScenario and selectedButton == buttons.playScenario then
+        startScenarioModeFromMenu()
+    elseif selectedButton == buttons.playLocal then
         if stateMachineRef then
             startLocalMultiplayerFromMenu()
         end
     elseif selectedButton == buttons.playOnline then
-        if not isButtonEnabled(buttons.playOnline) then
-            if hasActiveRemotePlaySession() then
-                showRemotePlayActivePrompt()
-            end
-            return
-        end
         if stateMachineRef then
             GAME.CURRENT.MODE = GAME.MODE.MULTYPLAYER_NET
             stateMachineRef.changeState("onlineLobby")
         end
     elseif selectedButton == buttons.playLeaderboard then
-        if not isButtonEnabled(buttons.playLeaderboard) then
-            return
-        end
         if stateMachineRef then
             stateMachineRef.changeState("onlineLeaderboard")
         end
@@ -1039,6 +967,8 @@ local function triggerSelectedButton(selectedButton)
             function() end
         )
     end
+
+    return true
 end
 
 function mainMenu.keypressed(key, scancode, isrepeat)

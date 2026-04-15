@@ -101,6 +101,10 @@ SETTINGS = {
         MUSIC = true,
         MUSIC_VOLUME = 0.1
     },
+    -- Build-time feature switches. Do not expose these in runtime menus.
+    FEATURES = {
+        SCENARIO_MODE = true
+    },
     INPUT = {
         GAMEPAD_AXIS_THRESHOLD = 0.45,
         GAMEPAD_AXIS_RELEASE_THRESHOLD = 0.35,
@@ -200,6 +204,7 @@ GAME = {
         SINGLE_PLAYER = "singlePlayer",
         MULTYPLAYER_LOCAL = "localMultyplayer",
         MULTYPLAYER_NET = "onlineMultyplayer",
+        SCENARIO = "scenarioMode",
         AI_VS_AI = "aiVsAi",
     },
     -- AI always plays optimally - no difficulty levels needed
@@ -222,6 +227,8 @@ GAME = {
         },
         TURN_ORDER = Factions.getTurnOrder(),
         LOCAL_MATCH_VARIANT = "couch",
+        SCENARIO = nil,
+        SCENARIO_REQUESTED_MODE = nil,
         REMOTE_PLAY_EXIT_PROMPT_PENDING = false,
         ONLINE = {
             active = false,

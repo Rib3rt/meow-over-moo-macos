@@ -972,6 +972,78 @@ function gameRuler:findPlayerCommandHub(playerNum)
     return nil
 end
 
+function gameRuler:isScenarioMode()
+    return GAME
+        and GAME.CURRENT
+        and GAME.MODE
+        and GAME.CURRENT.MODE == GAME.MODE.SCENARIO
+end
+
+function gameRuler:getScenarioTurnLimit()
+    local scenario = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    local turnsTarget = scenario and tonumber(scenario.turnsTarget) or nil
+    if not turnsTarget or turnsTarget < 1 then
+        return nil
+    end
+    return math.floor(turnsTarget)
+end
+
+function gameRuler:countPlayerUnitsOnBoard(playerNum)
+    if not self.currentGrid then
+        return 0
+    end
+
+    local count = 0
+    for row = 1, self.currentGrid.rows do
+        for col = 1, self.currentGrid.cols do
+            local unit = self.currentGrid:getUnitAt(row, col)
+            if unit and unit.player == playerNum and unit.name ~= "Rock" then
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+
+function gameRuler:evaluateScenarioEndConditions(source)
+    if not self:isScenarioMode() or self.currentPhase == PHASES.GAME_OVER then
+        return false
+    end
+
+    -- Scenario victory is only possible by destroying the Red Commandant.
+    local redCommandant = self:findPlayerCommandHub(2)
+    if not redCommandant then
+        self:addLogEntryString("SCENARIO CLEAR! Red Commandant destroyed.")
+        self.winner = 1
+        self.lastVictoryReason = "scenario_red_commandant_destroyed"
+        self:setPhase(PHASES.GAME_OVER)
+        return true
+    end
+
+    -- Scenario defeat if no Blue units remain on the battlefield.
+    if self:countPlayerUnitsOnBoard(1) <= 0 then
+        self:addLogEntryString("SCENARIO FAILED! No Blue units remain.")
+        self.winner = 2
+        self.lastVictoryReason = "scenario_blue_units_eliminated"
+        self:setPhase(PHASES.GAME_OVER)
+        return true
+    end
+
+    -- Scenario defeat at the start of Blue turn N+1 when limit is N.
+    local turnsLimit = self:getScenarioTurnLimit()
+    if turnsLimit
+        and self.currentPlayer == 1
+        and (tonumber(self.currentTurn) or 0) > turnsLimit then
+        self:addLogEntryString("SCENARIO FAILED! Turn limit exceeded (" .. tostring(turnsLimit) .. ").")
+        self.winner = 2
+        self.lastVictoryReason = "scenario_turn_limit"
+        self:setPhase(PHASES.GAME_OVER)
+        return true
+    end
+
+    return false
+end
+
 function gameRuler:getAdjacentCells(row, col)
     local adjacentCells = {}
 
@@ -1027,6 +1099,14 @@ function gameRuler:executeCommandHubDefenseInternal()
     local currentPlayer = self.currentPlayer
     local commandHub = self:findPlayerCommandHub(currentPlayer)
     if not commandHub then
+        if self:isScenarioMode() then
+            self:scheduleAction(0.05, function()
+                self.commandHubDefenseComplete = true
+                self.commandHubDefenseActive = false
+                self:nextTurnPhase()
+            end)
+            return true
+        end
         return false
     end
     
@@ -1195,13 +1275,19 @@ function gameRuler:executeCommandHubDefenseInternal()
                     -- Remove from grid
                     self.currentGrid:removeUnit(targetRow, targetCol)
 
-                    -- Check if the target player has any units left
-                    if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
-                        -- No units left, game over
-                        self.winner = self.currentPlayer
-                        self.lastVictoryReason = "elimination"
-                        self:setPhase(PHASES.GAME_OVER)
-                        return true
+                    if self:isScenarioMode() then
+                        self:scheduleAction(0.3, function()
+                            self:evaluateScenarioEndConditions("scenario_commandant_defense_destroy")
+                        end)
+                    else
+                        -- Check if the target player has any units left
+                        if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
+                            -- No units left, game over
+                            self.winner = self.currentPlayer
+                            self.lastVictoryReason = "elimination"
+                            self:setPhase(PHASES.GAME_OVER)
+                            return true
+                        end
                     end
                 else
                     self.currentGrid:applyDamageFlash(targetRow, targetCol, 0.1)
@@ -1714,6 +1800,10 @@ function gameRuler:checkDrawConditions()
 end
 
 function gameRuler:checkNoMoreUnitsGameOverConditions()
+    if self:isScenarioMode() then
+        return self:evaluateScenarioEndConditions("scenario_unit_check")
+    end
+
     if not self:playerHasUnitsLeft(self.currentPlayer) then
         -- No units left - game over
         self.winner = self:getOpponentPlayer()
@@ -1722,6 +1812,8 @@ function gameRuler:checkNoMoreUnitsGameOverConditions()
         self.noMoreUnitsGameOver = true
         return true
     end
+
+    return false
 end
 
 function gameRuler:nextTurn()
@@ -1735,16 +1827,24 @@ function gameRuler:nextTurn()
     -- Reset the start time for the next player
     self.gameTimer.currentPlayerStartTime = currentTime
 
-    if self:checkNoMoreUnitsGameOverConditions() then
-        return true
+    if self:isScenarioMode() then
+        if self:evaluateScenarioEndConditions("scenario_pre_next_turn") then
+            return true
+        end
+    else
+        if self:checkNoMoreUnitsGameOverConditions() then
+            return true
+        end
     end
 
     -- Reset damage flags for the current player's units before switching turns
     self:resetDamageFlags(self.currentPlayer)
 
     -- Draw counter is evaluated once per player turn.
-    if self:checkDrawConditions() then
-        return true
+    if not self:isScenarioMode() then
+        if self:checkDrawConditions() then
+            return true
+        end
     end
     
     -- Switch players and increment turn counter when needed
@@ -1754,6 +1854,10 @@ function gameRuler:nextTurn()
         self.currentTurn = self.currentTurn + 1
         GAME.CURRENT.TURN = self.currentTurn
         self.currentPlayer = 1
+
+        if self:isScenarioMode() and self:evaluateScenarioEndConditions("scenario_blue_turn_start") then
+            return true
+        end
 
         -- Schedule the start-of-turn presentation without delaying gameplay logic
         self:scheduleAction(0.2, function()
@@ -2481,9 +2585,16 @@ function gameRuler:loadResumeSnapshot(snapshot)
         return false, string.format("board_unit_count_mismatch:%d/%d", placedBoardUnits, expectedBoardUnits)
     end
 
-    if (commandantCounts[1] or 0) ~= 1 or (commandantCounts[2] or 0) ~= 1 then
+    local blueCommandants = commandantCounts[1] or 0
+    local redCommandants = commandantCounts[2] or 0
+    if self:isScenarioMode() then
+        if blueCommandants ~= 0 or redCommandants ~= 1 then
+            self:resetGame()
+            return false, string.format("commandant_integrity_failed:%d/%d", blueCommandants, redCommandants)
+        end
+    elseif blueCommandants ~= 1 or redCommandants ~= 1 then
         self:resetGame()
-        return false, string.format("commandant_integrity_failed:%d/%d", commandantCounts[1] or 0, commandantCounts[2] or 0)
+        return false, string.format("commandant_integrity_failed:%d/%d", blueCommandants, redCommandants)
     end
 
     local expectedSignature = snapshot.integritySignature
@@ -3534,16 +3645,26 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                 attackingUnit.isAnimating = nil
 
                 if targetDestroyed then
+                    local scenarioOutcomeScheduled = false
+
                     -- Check if it was a Commandant
                     if targetUnit.name == "Commandant" then
-                        -- Schedule game over with delay to let animation complete
-                        self:scheduleAction(0.3, function()
-                            -- Game over
-                            self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
-                            self.winner = attackingUnit.player
-                            self.lastVictoryReason = "commandant"
-                            self:setPhase(PHASES.GAME_OVER)
-                        end)
+                        if self:isScenarioMode() then
+                            -- Scenario: only Red Commandant destruction can end the match in victory.
+                            self:scheduleAction(0.3, function()
+                                self:evaluateScenarioEndConditions("scenario_melee_commandant_destroy")
+                            end)
+                            scenarioOutcomeScheduled = true
+                        else
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- Game over
+                                self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
+                                self.winner = attackingUnit.player
+                                self.lastVictoryReason = "commandant"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                        end
                     else
                         -- Instead of immediately capturing, schedule the movement after a delay
                         self:scheduleAction(flashDuration, function()
@@ -3552,16 +3673,24 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                         end)
                     end
 
-                    -- Check if the target player has any units left
-                    if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
-                        -- Schedule game over with delay to let animation complete
-                        self:scheduleAction(0.3, function()
-                            -- No units left, game over
-                            self.winner = self.currentPlayer
-                            self.lastVictoryReason = "elimination"
-                            self:setPhase(PHASES.GAME_OVER)
-                        end)
-                        return true
+                    if self:isScenarioMode() then
+                        if not scenarioOutcomeScheduled then
+                            self:scheduleAction(0.3, function()
+                                self:evaluateScenarioEndConditions("scenario_melee_unit_destroy")
+                            end)
+                        end
+                    else
+                        -- Check if the target player has any units left
+                        if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- No units left, game over
+                                self.winner = self.currentPlayer
+                                self.lastVictoryReason = "elimination"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                            return true
+                        end
                     end
                 end
                 -- Check for stalled units
@@ -3700,27 +3829,39 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
 
                     -- Check if it was a Commandant
                     if impactTarget.name == "Commandant" then
-                        -- Schedule game over with delay to let animation complete
-                        self:scheduleAction(0.3, function()
-                            -- Game over
-                            self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
-                            self.winner = attackingUnit.player
-                            self.lastVictoryReason = "commandant"
-                            self:setPhase(PHASES.GAME_OVER)
-                        end)
+                        if self:isScenarioMode() then
+                            self:scheduleAction(0.3, function()
+                                self:evaluateScenarioEndConditions("scenario_beam_commandant_destroy")
+                            end)
+                        else
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- Game over
+                                self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
+                                self.winner = attackingUnit.player
+                                self.lastVictoryReason = "commandant"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                        end
                         return true
                     end
 
-                    -- Check if the target player has any units left
-                    if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
-                        -- Schedule game over with delay to let animation complete
+                    if self:isScenarioMode() then
                         self:scheduleAction(0.3, function()
-                            -- No units left, game over
-                            self.winner = self.currentPlayer
-                            self.lastVictoryReason = "elimination"
-                            self:setPhase(PHASES.GAME_OVER)
+                            self:evaluateScenarioEndConditions("scenario_beam_unit_destroy")
                         end)
-                        return true
+                    else
+                        -- Check if the target player has any units left
+                        if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- No units left, game over
+                                self.winner = self.currentPlayer
+                                self.lastVictoryReason = "elimination"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                            return true
+                        end
                     end
                 else
                     self.currentGrid:addFloatingText(targetRow, targetCol, damage, false, "assets/audio/Success3.wav")
@@ -3905,27 +4046,39 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                     
                     -- Check for game over conditions
                     if impactTarget.name == "Commandant" then
-                        -- Schedule game over with delay to let animation complete
-                        self:scheduleAction(0.3, function()
-                            -- Game over
-                            self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
-                            self.winner = attackingUnit.player
-                            self.lastVictoryReason = "commandant"
-                            self:setPhase(PHASES.GAME_OVER)
-                        end)
+                        if self:isScenarioMode() then
+                            self:scheduleAction(0.3, function()
+                                self:evaluateScenarioEndConditions("scenario_artillery_commandant_destroy")
+                            end)
+                        else
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- Game over
+                                self:addLogEntryString("P" .. self.currentPlayer .. " WIN! P" .. self:getOpponentPlayer() .. "CM destroyed")
+                                self.winner = attackingUnit.player
+                                self.lastVictoryReason = "commandant"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                        end
                         return true
                     end
                     
-                    -- Check if the target player has any units left
-                    if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
-                        -- Schedule game over with delay to let animation complete
+                    if self:isScenarioMode() then
                         self:scheduleAction(0.3, function()
-                            -- No units left, game over
-                            self.winner = self.currentPlayer
-                            self.lastVictoryReason = "elimination"
-                            self:setPhase(PHASES.GAME_OVER)
+                            self:evaluateScenarioEndConditions("scenario_artillery_unit_destroy")
                         end)
-                        return true
+                    else
+                        -- Check if the target player has any units left
+                        if not self:playerHasUnitsLeft(self:getOpponentPlayer()) then
+                            -- Schedule game over with delay to let animation complete
+                            self:scheduleAction(0.3, function()
+                                -- No units left, game over
+                                self.winner = self.currentPlayer
+                                self.lastVictoryReason = "elimination"
+                                self:setPhase(PHASES.GAME_OVER)
+                            end)
+                            return true
+                        end
                     end
                 else
                     self.currentGrid:addFloatingText(targetRow, targetCol, damage, false, "assets/audio/Success3.wav")
@@ -4125,6 +4278,13 @@ end
 
 -- Main action dispatcher
 function gameRuler:performAction(actionType, params)
+    local currentMode = GAME and GAME.CURRENT and GAME.CURRENT.MODE or nil
+    if currentMode == GAME.MODE.SCENARIO then
+        if actionType == "selectSupplyUnit" or actionType == "deployUnit" or actionType == "deployUnitNearHub" then
+            return false, "Supply actions are disabled in scenario mode"
+        end
+    end
+
     -- Check if the action is allowed in the current phase
     if not self:isActionAllowed(actionType) then
         return false, "Action not allowed in current phase"

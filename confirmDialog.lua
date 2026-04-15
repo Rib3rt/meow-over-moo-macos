@@ -31,6 +31,11 @@ local UI_COLORS = uiTheme.COLORS
 local dialog = {
     width = 400,
     height = 180,
+    minWidth = 360,
+    maxWidth = 560,
+    minHeight = 180,
+    maxHeight = 360,
+    wrappedMessage = {},
     buttons = {
         confirm = {
             width = 150,
@@ -72,6 +77,33 @@ local function resetTransientInputs(reason)
     if GAME and GAME.CURRENT and GAME.CURRENT.STATE_MACHINE and GAME.CURRENT.STATE_MACHINE.resetTransientInputs then
         GAME.CURRENT.STATE_MACHINE.resetTransientInputs(reason or "confirm_dialog")
     end
+end
+
+local function getWrappedMessageLines(textValue, maxWidth)
+    local safeText = tostring(textValue or "")
+    local width = math.max(120, math.floor(tonumber(maxWidth) or 120))
+    local font = love.graphics.getFont()
+    local _, wrapped = font:getWrap(safeText, width)
+    if type(wrapped) ~= "table" or #wrapped == 0 then
+        wrapped = {safeText}
+    end
+    return wrapped
+end
+
+local function recomputeDialogHeight()
+    local topPadding = 20
+    local titleToMessageGap = 14
+    local messageToButtonsGap = 18
+    local bottomPadding = 20
+    local messageWidth = dialog.width - 40
+
+    local font = love.graphics.getFont()
+    local lineHeight = font:getHeight()
+    dialog.wrappedMessage = getWrappedMessageLines(message, messageWidth)
+
+    local messageHeight = math.max(lineHeight, (#dialog.wrappedMessage * lineHeight))
+    local desiredHeight = topPadding + lineHeight + titleToMessageGap + messageHeight + messageToButtonsGap + dialog.buttons.confirm.height + bottomPadding
+    dialog.height = math.max(dialog.minHeight, math.min(dialog.maxHeight, math.ceil(desiredHeight)))
 end
 
 --------------------------------------------------
@@ -149,6 +181,7 @@ function confirmDialog.show(messageText, confirmCallback, cancelCallback, option
     local confirmText = tostring(options.confirmText or "Yes")
     local cancelText = tostring(options.cancelText or "No")
     local defaultFocus = (options.defaultFocus == "confirm") and "confirm" or "cancel"
+    local requestedWidth = tonumber(options.width)
     if singleButtonMode then
         defaultFocus = "confirm"
     end
@@ -168,6 +201,17 @@ function confirmDialog.show(messageText, confirmCallback, cancelCallback, option
     uiTheme.applyButtonVariant(dialog.buttons.cancel, "default")
     dialog.buttons.confirm.textOffsetY = dialog.buttons.confirm.textOffsetY or (dialog.buttons.confirm.height / 2 - 10)
     dialog.buttons.cancel.textOffsetY = dialog.buttons.cancel.textOffsetY or (dialog.buttons.cancel.height / 2 - 10)
+    if requestedWidth and requestedWidth > 0 then
+        dialog.width = math.floor(requestedWidth)
+    else
+        dialog.width = 400
+    end
+    dialog.width = math.max(dialog.minWidth, math.min(dialog.maxWidth, dialog.width))
+    recomputeDialogHeight()
+    if #dialog.wrappedMessage > 6 and dialog.width < dialog.maxWidth then
+        dialog.width = math.min(dialog.maxWidth, dialog.width + 120)
+        recomputeDialogHeight()
+    end
 
     if focusedButton == "confirm" then
         dialog.buttons.confirm.currentColor = UI_COLORS.buttonHover
@@ -256,9 +300,13 @@ function confirmDialog.draw()
     
     -- Use dialog's fixed dimensions
     local dialogWidth = dialog.width 
+    recomputeDialogHeight()
     local dialogHeight = dialog.height
     local buttonWidth = dialog.buttons.confirm.width
     local buttonHeight = dialog.buttons.confirm.height
+    local topPadding = 20
+    local titleToMessageGap = 14
+    local messageToButtonsGap = 18
     
     -- Center dialog based on actual transformed screen dimensions
     local transformedWidth = actualWidth / SETTINGS.DISPLAY.SCALE
@@ -287,13 +335,26 @@ function confirmDialog.draw()
     
     -- Draw dialog panel with fixed dimensions
     drawTechPanel(dialog.x, dialog.y, dialogWidth, dialogHeight)
-    
+
     -- Draw title and message
     love.graphics.setColor(UI_COLORS.text)
-    love.graphics.printf(dialogTitle or "Confirm", dialog.x, dialog.y + 20, dialogWidth, "center")
+    local titleY = dialog.y + topPadding
+    love.graphics.printf(dialogTitle or "Confirm", dialog.x, titleY, dialogWidth, "center")
     
     love.graphics.setColor(UI_COLORS.text)
-    love.graphics.printf(message, dialog.x + 20, dialog.y + 60, dialogWidth - 40, "center")
+    local messageY = titleY + love.graphics.getFont():getHeight() + titleToMessageGap
+    local maxMessageHeight = dialog.buttons.confirm.y - messageToButtonsGap - messageY
+    if maxMessageHeight < love.graphics.getFont():getHeight() then
+        maxMessageHeight = love.graphics.getFont():getHeight()
+    end
+    love.graphics.setScissor(
+        math.floor((dialog.x + 20) * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETX),
+        math.floor(messageY * SETTINGS.DISPLAY.SCALE + SETTINGS.DISPLAY.OFFSETY),
+        math.floor((dialogWidth - 40) * SETTINGS.DISPLAY.SCALE),
+        math.floor(maxMessageHeight * SETTINGS.DISPLAY.SCALE)
+    )
+    love.graphics.printf(message, dialog.x + 20, messageY, dialogWidth - 40, "center")
+    love.graphics.setScissor()
     
     -- Draw buttons
     drawButton(dialog.buttons.confirm)

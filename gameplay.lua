@@ -74,10 +74,18 @@ local onlineMatchSessionClosed = false
 local ONLINE_GAMEPLAY_RECONNECT_TIMEOUT_SEC = 3.0
 local ONLINE_TRAFFIC_STALE_SEC = tonumber((((SETTINGS or {}).STEAM_ONLINE or {}).PEER_TRAFFIC_STALE_SEC)) or 3.0
 local ONLINE_TRAFFIC_STALE_GRACE_SEC = tonumber((((SETTINGS or {}).STEAM_ONLINE or {}).PEER_TRAFFIC_STALE_GRACE_SEC)) or math.max(ONLINE_TRAFFIC_STALE_SEC * 2, 6.0)
+-- SCENARIO ISOLATION RULE:
+-- Fields prefixed by matchObjective/scenarioOutcome below are for scenario mode flows.
+-- Changes here must not alter behavior in non-scenario modes.
 local onlineAutoAdvanceState = {
     candidateKey = nil,
     candidateSince = nil,
-    issuedKey = nil
+    issuedKey = nil,
+    matchObjectiveModalState = nil,
+    scenarioOutcomeModalShown = false,
+    matchObjectiveSecondaryButtonBounds = nil,
+    matchObjectiveFocusedButton = "primary",
+    matchObjectiveHoveredButton = nil
 }
 -- Don't initialize with default value, always use GAME.CURRENT values
 -- AI always plays optimally - no difficulty levels
@@ -410,7 +418,7 @@ local function handleSupplyPanelShortcutKey(key)
         return false
     end
 
-    if gameMode == GAME.MODE.AI_VS_AI then
+    if gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
         return true
     end
 
@@ -964,7 +972,7 @@ isCurrentTurnLocallyControlled = function()
         return GAME.isFactionControlledLocally(gameRuler.currentPlayer)
     end
 
-    if gameMode == GAME.MODE.SINGLE_PLAYER then
+    if gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.SCENARIO then
         return gameRuler.currentPlayer ~= gameRuler.aiPlayerNumber
     end
 
@@ -2235,7 +2243,7 @@ getUnitCodexBaseFaction = function()
         if localFaction == 1 or localFaction == 2 then
             return localFaction
         end
-    elseif gameMode == GAME.MODE.SINGLE_PLAYER then
+    elseif gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.SCENARIO then
         local localFaction = GAME.getLocalFactionId and GAME.getLocalFactionId() or nil
         if localFaction == 1 or localFaction == 2 then
             return localFaction
@@ -2789,24 +2797,184 @@ local function handleUnitCodexOverlayClick(transformedX, transformedY)
 end
 
 local function hasVisibleMatchObjectiveModal()
-    if not gameRuler or gameRuler.currentPhase == "gameOver" then
+    if not gameRuler or matchObjectiveModalVisible ~= true then
         return false
     end
-    return matchObjectiveModalVisible == true
+    if gameRuler.currentPhase == "gameOver" then
+        return onlineAutoAdvanceState.matchObjectiveModalState ~= nil and onlineAutoAdvanceState.matchObjectiveModalState.allowDuringGameOver == true
+    end
+    return true
 end
 
-local function dismissMatchObjectiveModal(reason)
+onlineAutoAdvanceState.showMatchObjectiveModal = function(config)
+    local modalConfig = type(config) == "table" and config or {}
+    local ctaSecondary = nil
+    if type(modalConfig.ctaSecondary) == "string" and modalConfig.ctaSecondary ~= "" then
+        ctaSecondary = modalConfig.ctaSecondary
+    end
+    onlineAutoAdvanceState.matchObjectiveModalState = {
+        title = type(modalConfig.title) == "string" and modalConfig.title or nil,
+        body = type(modalConfig.body) == "string" and modalConfig.body or nil,
+        cta = type(modalConfig.cta) == "string" and modalConfig.cta or nil,
+        ctaSecondary = ctaSecondary,
+        allowDuringGameOver = modalConfig.allowDuringGameOver == true,
+        onDismiss = type(modalConfig.onDismiss) == "function" and modalConfig.onDismiss or nil,
+        onDismissSecondary = type(modalConfig.onDismissSecondary) == "function" and modalConfig.onDismissSecondary or nil
+    }
+    matchObjectiveModalVisible = true
+    matchObjectiveCloseButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
+    if ctaSecondary and modalConfig.initialFocus == "secondary" then
+        onlineAutoAdvanceState.matchObjectiveFocusedButton = "secondary"
+    else
+        onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+    end
+end
+
+onlineAutoAdvanceState.getScenarioReturnState = function()
+    local configured = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO_RETURN_STATE or nil
+    if type(configured) == "string" and configured ~= "" then
+        return configured
+    end
+    return "scenarioSelect"
+end
+
+onlineAutoAdvanceState.getScenarioReturnCta = function()
+    if onlineAutoAdvanceState.getScenarioReturnState() == "scenarioEditor" then
+        return "Back to Editor"
+    end
+    return "Back to Scenario List"
+end
+
+-- SCENARIO-ONLY: restarts the same loaded scenario snapshot and increments attempts.
+onlineAutoAdvanceState.restartCurrentScenarioAttempt = function()
+    if not (GAME and GAME.CURRENT) then
+        return
+    end
+
+    local scenarioState = GAME.CURRENT.SCENARIO
+    if type(scenarioState) ~= "table" or type(scenarioState.snapshot) ~= "table" then
+        if stateMachineRef and stateMachineRef.changeState then
+            stateMachineRef.changeState(onlineAutoAdvanceState.getScenarioReturnState())
+        end
+        return
+    end
+
+    local nextAttempts = math.max(0, tonumber(scenarioState.attempts) or 0) + 1
+    scenarioState.attempts = nextAttempts
+    scenarioState.solved = false
+
+    GAME.CURRENT.SCENARIO_RESULT = nil
+    GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
+    GAME.CURRENT.MODE = GAME.MODE.SCENARIO
+    GAME.CURRENT.PENDING_RESUME_SNAPSHOT = nil
+    GAME.CURRENT.RESUME_RESTART_NOTICE = nil
+
+    if stateMachineRef and stateMachineRef.changeState then
+        stateMachineRef.changeState("scenarioGameplay")
+    end
+end
+
+-- SCENARIO-ONLY: shows solved/failed modal and routes back/retry behavior.
+onlineAutoAdvanceState.maybeShowScenarioOutcomeModal = function()
+    if gameMode ~= GAME.MODE.SCENARIO or not gameRuler or gameRuler.currentPhase ~= "gameOver" then
+        return
+    end
+    if onlineAutoAdvanceState.scenarioOutcomeModalShown then
+        return
+    end
+
+    onlineAutoAdvanceState.scenarioOutcomeModalShown = true
+    local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    local scenarioId = scenarioState and scenarioState.id or nil
+    local attempts = scenarioState and tonumber(scenarioState.attempts) or nil
+    attempts = math.max(1, math.floor(attempts or 1))
+
+    local reason = tostring(gameRuler.lastVictoryReason or "")
+    local solved = tonumber(gameRuler.winner) == 1 or reason == "scenario_red_commandant_destroyed"
+    local title = solved and "SOLVED" or "FAILED ATTEMPT"
+    local body = solved and ("Congratulation scenario solved in " .. tostring(attempts) .. " attempts") or "Allowed turn exeeded"
+    if not solved and reason == "scenario_blue_units_eliminated" then
+        body = "You lost all units!"
+    end
+
+    if GAME and GAME.CURRENT then
+        GAME.CURRENT.SCENARIO_RESULT = {
+            id = scenarioId,
+            solved = solved,
+            attempts = attempts,
+            reason = reason
+        }
+    end
+
+    local modalConfig = {
+        title = title,
+        body = body,
+        cta = onlineAutoAdvanceState.getScenarioReturnCta(),
+        allowDuringGameOver = true,
+        onDismiss = function()
+            if stateMachineRef and stateMachineRef.changeState then
+                stateMachineRef.changeState(onlineAutoAdvanceState.getScenarioReturnState())
+            end
+        end
+    }
+    if not solved then
+        modalConfig.ctaSecondary = "Retry"
+        modalConfig.onDismissSecondary = function()
+            onlineAutoAdvanceState.restartCurrentScenarioAttempt()
+        end
+        modalConfig.initialFocus = "secondary"
+    end
+    onlineAutoAdvanceState.showMatchObjectiveModal(modalConfig)
+
+    if solved then
+        if ui and ui.gameOverPanel then
+            ui.gameOverPanel.currentY = ui.gameOverPanel.targetY
+        end
+        if ui and ui.spawnConfettiBurst then
+            ui:spawnConfettiBurst()
+        end
+    else
+        if ui and ui.playUISound then
+            ui:playUISound("assets/audio/SciFiNotification3.wav", SETTINGS.AUDIO.SFX_VOLUME)
+        elseif SETTINGS.AUDIO.SFX then
+            soundCache.play("assets/audio/SciFiNotification3.wav", {
+                clone = true,
+                volume = SETTINGS.AUDIO.SFX_VOLUME,
+                category = "sfx"
+            })
+        end
+    end
+end
+
+local function dismissMatchObjectiveModal(reason, action)
     if not hasVisibleMatchObjectiveModal() then
         return false
     end
+    local modalState = onlineAutoAdvanceState.matchObjectiveModalState or {}
+    local onDismiss = modalState.onDismiss
+    local onDismissSecondary = modalState.onDismissSecondary
     matchObjectiveModalVisible = false
     matchObjectiveCloseButtonBounds = nil
-    print(string.format("[Gameplay] Match objective modal dismissed (%s)", tostring(reason or "unknown")))
+    onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+    onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
+    onlineAutoAdvanceState.matchObjectiveModalState = nil
+    local dismissAction = action == "secondary" and "secondary" or "primary"
+    print(string.format("[Gameplay] Match objective modal dismissed (%s, action=%s)", tostring(reason or "unknown"), dismissAction))
+    local callback = dismissAction == "secondary" and onDismissSecondary or onDismiss
+    if callback then
+        local ok, dismissErr = pcall(callback, reason, dismissAction)
+        if not ok then
+            print(string.format("[Gameplay] Match objective dismiss callback failed: %s", tostring(dismissErr)))
+        end
+    end
     return true
 end
 
 local function isMatchObjectiveCloseKey(key)
-    return key == "escape" or key == "return" or key == "space"
+    return key == "escape"
 end
 
 local function ensureObjectiveModalFonts()
@@ -2832,19 +3000,32 @@ end
 local function drawMatchObjectiveModal()
     if not hasVisibleMatchObjectiveModal() then
         matchObjectiveCloseButtonBounds = nil
+        onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
         return
     end
 
     ensureObjectiveModalFonts()
     local defaultFont = love.graphics.getFont()
+    local modalState = onlineAutoAdvanceState.matchObjectiveModalState or {}
 
-    local bodyText = MATCH_OBJECTIVE_BODY
+    local titleText = modalState.title or MATCH_OBJECTIVE_TITLE
+    local ctaText = modalState.cta or MATCH_OBJECTIVE_CTA
+    local ctaSecondaryText = nil
+    if type(modalState.ctaSecondary) == "string" and modalState.ctaSecondary ~= "" then
+        ctaSecondaryText = modalState.ctaSecondary
+    end
+    local bodyText = modalState.body or MATCH_OBJECTIVE_BODY
     if isRemotePlayLocalMode() then
-        bodyText = bodyText .. "\\nRemote Play Together match: online rating is not affected."
+        bodyText = bodyText .. "\nRemote Play Together match: online rating is not affected."
+    end
+
+    local bodyLineCount = 1
+    for _ in string.gmatch(bodyText, "\n") do
+        bodyLineCount = bodyLineCount + 1
     end
 
     local panelWidth = 620
-    local panelHeight = isRemotePlayLocalMode() and 250 or 210
+    local panelHeight = math.max(210, 166 + (bodyLineCount * 28))
     local x = (SETTINGS.DISPLAY.WIDTH - panelWidth) / 2
     local y = (SETTINGS.DISPLAY.HEIGHT - panelHeight) / 2
 
@@ -2853,42 +3034,105 @@ local function drawMatchObjectiveModal()
     love.graphics.setColor(0.95, 0.9, 0.75, 0.95)
     love.graphics.rectangle("line", x, y, panelWidth, panelHeight, 8, 8)
     love.graphics.setFont(objectiveTitleFont)
-    love.graphics.printf(MATCH_OBJECTIVE_TITLE, x, y + 16, panelWidth, "center")
+    love.graphics.printf(titleText, x, y + 16, panelWidth, "center")
     love.graphics.setFont(objectiveBodyFont)
     love.graphics.printf(bodyText, x + 20, y + 72, panelWidth - 40, "center")
 
-    local closeWidth = 190
     local closeHeight = 40
-    local closeX = x + (panelWidth - closeWidth) / 2
     local closeY = y + panelHeight - closeHeight - 16
-    matchObjectiveCloseButtonBounds = {
-        x = closeX,
-        y = closeY,
-        width = closeWidth,
-        height = closeHeight
-    }
 
     local mouseX, mouseY = love.mouse.getPosition()
     local transformedMouseX, transformedMouseY = transformMousePosition(mouseX, mouseY)
-    local hovered = transformedMouseX >= closeX and transformedMouseX <= closeX + closeWidth and
-        transformedMouseY >= closeY and transformedMouseY <= closeY + closeHeight
-    local focused = true -- strict modal: this is always the active control.
-
-    if hovered then
-        love.graphics.setColor(0.32, 0.32, 0.38, 0.97)
-    elseif focused then
-        love.graphics.setColor(0.27, 0.27, 0.33, 0.94)
-    else
-        love.graphics.setColor(0.2, 0.2, 0.24, 0.9)
+    local hoveredButtonName = nil
+    local function drawModalButton(bounds, label, hovered, focused)
+        if hovered or focused then
+            love.graphics.setColor(0.32, 0.32, 0.38, 0.97)
+        else
+            love.graphics.setColor(0.2, 0.2, 0.24, 0.9)
+        end
+        love.graphics.rectangle("fill", bounds.x, bounds.y, bounds.width, bounds.height, 6, 6)
+        love.graphics.setColor(0.98, 0.92, 0.72, 1)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", bounds.x, bounds.y, bounds.width, bounds.height, 6, 6)
+        love.graphics.setLineWidth(1)
+        love.graphics.setColor(0.95, 0.9, 0.75, 0.95)
+        love.graphics.setFont(objectiveButtonFont)
+        love.graphics.printf(label, bounds.x, bounds.y + 9, bounds.width, "center")
     end
-    love.graphics.rectangle("fill", closeX, closeY, closeWidth, closeHeight, 6, 6)
-    love.graphics.setColor(0.98, 0.92, 0.72, 1)
-    love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", closeX, closeY, closeWidth, closeHeight, 6, 6)
-    love.graphics.setLineWidth(1)
-    love.graphics.setColor(0.95, 0.9, 0.75, 0.95)
-    love.graphics.setFont(objectiveButtonFont)
-    love.graphics.printf(MATCH_OBJECTIVE_CTA, closeX, closeY + 9, closeWidth, "center")
+
+    if ctaSecondaryText then
+        local buttonWidth = 220
+        local buttonGap = 16
+        local totalWidth = (buttonWidth * 2) + buttonGap
+        local primaryX = x + (panelWidth - totalWidth) / 2
+        local secondaryX = primaryX + buttonWidth + buttonGap
+
+        matchObjectiveCloseButtonBounds = {
+            x = primaryX,
+            y = closeY,
+            width = buttonWidth,
+            height = closeHeight
+        }
+        onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = {
+            x = secondaryX,
+            y = closeY,
+            width = buttonWidth,
+            height = closeHeight
+        }
+
+        local primaryHovered = transformedMouseX >= matchObjectiveCloseButtonBounds.x
+            and transformedMouseX <= matchObjectiveCloseButtonBounds.x + matchObjectiveCloseButtonBounds.width
+            and transformedMouseY >= matchObjectiveCloseButtonBounds.y
+            and transformedMouseY <= matchObjectiveCloseButtonBounds.y + matchObjectiveCloseButtonBounds.height
+        local secondaryHovered = transformedMouseX >= onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.x
+            and transformedMouseX <= onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.x + onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.width
+            and transformedMouseY >= onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.y
+            and transformedMouseY <= onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.y + onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds.height
+
+        if primaryHovered then
+            hoveredButtonName = "primary"
+        elseif secondaryHovered then
+            hoveredButtonName = "secondary"
+        end
+
+        drawModalButton(
+            matchObjectiveCloseButtonBounds,
+            ctaText,
+            primaryHovered,
+            onlineAutoAdvanceState.matchObjectiveFocusedButton ~= "secondary"
+        )
+        drawModalButton(
+            onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds,
+            ctaSecondaryText,
+            secondaryHovered,
+            onlineAutoAdvanceState.matchObjectiveFocusedButton == "secondary"
+        )
+    else
+        local closeWidth = 190
+        local closeX = x + (panelWidth - closeWidth) / 2
+        matchObjectiveCloseButtonBounds = {
+            x = closeX,
+            y = closeY,
+            width = closeWidth,
+            height = closeHeight
+        }
+        onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+
+        local hovered = transformedMouseX >= closeX and transformedMouseX <= closeX + closeWidth and
+            transformedMouseY >= closeY and transformedMouseY <= closeY + closeHeight
+        if hovered then
+            hoveredButtonName = "primary"
+        end
+        drawModalButton(matchObjectiveCloseButtonBounds, ctaText, hovered, not hovered)
+    end
+
+    if hoveredButtonName ~= onlineAutoAdvanceState.matchObjectiveHoveredButton then
+        if hoveredButtonName and ui and ui.playButtonBeep then
+            ui:playButtonBeep()
+        end
+        onlineAutoAdvanceState.matchObjectiveHoveredButton = hoveredButtonName
+    end
+
     love.graphics.setFont(defaultFont)
 end
 
@@ -2897,10 +3141,20 @@ local function handleMatchObjectiveModalClick(transformedX, transformedY)
         return false
     end
 
+    local secondaryButton = onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds
+    if secondaryButton
+       and transformedX >= secondaryButton.x and transformedX <= secondaryButton.x + secondaryButton.width
+       and transformedY >= secondaryButton.y and transformedY <= secondaryButton.y + secondaryButton.height then
+        onlineAutoAdvanceState.matchObjectiveFocusedButton = "secondary"
+        dismissMatchObjectiveModal("mouse_close", "secondary")
+        return true
+    end
+
     local button = matchObjectiveCloseButtonBounds
     if button and transformedX >= button.x and transformedX <= button.x + button.width and
        transformedY >= button.y and transformedY <= button.y + button.height then
-        dismissMatchObjectiveModal("mouse_close")
+        onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+        dismissMatchObjectiveModal("mouse_close", "primary")
         return true
     end
     return true
@@ -2915,14 +3169,38 @@ function gameplay.gamepadpressed(joystick, button)
     end
 
     if hasVisibleMatchObjectiveModal() then
+        local modalState = onlineAutoAdvanceState.matchObjectiveModalState or {}
+        local hasSecondary = type(modalState.ctaSecondary) == "string" and modalState.ctaSecondary ~= ""
+        if hasSecondary then
+            local previousFocus = onlineAutoAdvanceState.matchObjectiveFocusedButton
+            if button == "dpleft" or button == "leftshoulder" then
+                onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+                if previousFocus ~= onlineAutoAdvanceState.matchObjectiveFocusedButton and ui and ui.playButtonBeep then
+                    ui:playButtonBeep()
+                end
+                return true
+            elseif button == "dpright" or button == "rightshoulder" then
+                onlineAutoAdvanceState.matchObjectiveFocusedButton = "secondary"
+                if previousFocus ~= onlineAutoAdvanceState.matchObjectiveFocusedButton and ui and ui.playButtonBeep then
+                    ui:playButtonBeep()
+                end
+                return true
+            end
+        end
         if button == "a" then
-            dismissMatchObjectiveModal("gamepad_a_close")
+            local dismissAction = (hasSecondary and onlineAutoAdvanceState.matchObjectiveFocusedButton == "secondary") and "secondary" or "primary"
+            dismissMatchObjectiveModal("gamepad_a_close", dismissAction)
             return true
         elseif button == "b" or button == "back" then
-            dismissMatchObjectiveModal("gamepad_cancel_close")
+            dismissMatchObjectiveModal("gamepad_cancel_close", "primary")
             return true
         end
         -- Keep objective modal focus locked until closed.
+        return true
+    end
+
+    if gameMode == GAME.MODE.SCENARIO and gameRuler and gameRuler.currentPhase == "gameOver" then
+        onlineAutoAdvanceState.maybeShowScenarioOutcomeModal()
         return true
     end
 
@@ -2990,8 +3268,8 @@ function gameplay.gamepadpressed(joystick, button)
         steamRuntime.onGuideButtonPressed()
         return true
     elseif button == "leftshoulder" then
-        -- Block in AI vs AI mode
-        if gameMode == GAME.MODE.AI_VS_AI then
+        -- Block in AI vs AI and scenario modes
+        if gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
             return true
         end
         if isRemotePlayLocalMode() and not canCurrentInputIssueActions() then
@@ -3001,8 +3279,8 @@ function gameplay.gamepadpressed(joystick, button)
             return true
         end
     elseif button == "rightshoulder" then
-        -- Block in AI vs AI mode
-        if gameMode == GAME.MODE.AI_VS_AI then
+        -- Block in AI vs AI and scenario modes
+        if gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
             return true
         end
         if isRemotePlayLocalMode() and not canCurrentInputIssueActions() then
@@ -3129,8 +3407,26 @@ local function initializeComponents()
     gameRuler.currentGrid = grid
 
     -- Initialize UI and connect to game ruler
-    ui = uiClass.new({stateMachine = stateMachineRef})
+    ui = uiClass.new({
+        stateMachine = stateMachineRef,
+        hideSupplyPanels = (gameMode == GAME.MODE.SCENARIO),
+        suppressGameOverPanel = (gameMode == GAME.MODE.SCENARIO),
+        onScenarioBackRequested = function()
+            if stateMachineRef and stateMachineRef.changeState then
+                stateMachineRef.changeState(onlineAutoAdvanceState.getScenarioReturnState())
+                return true
+            end
+            return false
+        end,
+        onScenarioRetryRequested = function()
+            onlineAutoAdvanceState.restartCurrentScenarioAttempt()
+            return true
+        end
+    })
     ui.gameRuler = gameRuler
+    if gameMode == GAME.MODE.SCENARIO and ui.gameOverPanel then
+        ui.gameOverPanel.visible = false
+    end
     ui.onSurrenderRequested = requestSurrenderFromUi
     ui.onOnlineReactionRequested = requestOnlineReactionFromUi
     ui.onUnitCodexRequested = function()
@@ -3146,7 +3442,7 @@ local function initializeComponents()
 
     -- Initialize AI if in single player or AI vs AI mode
     aiPlayer = nil
-    if gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI then
+    if gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
         local aiFaction = GAME.getAIFactionId()
         
         aiPlayer = AiClass.new({
@@ -3178,6 +3474,11 @@ local function initializeComponents()
     onlineAutoAdvanceState.issuedKey = nil
     matchObjectiveModalVisible = false
     matchObjectiveCloseButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+    onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
+    onlineAutoAdvanceState.matchObjectiveModalState = nil
+    onlineAutoAdvanceState.scenarioOutcomeModalShown = false
     onlineMatchSessionClosed = false
     if gameMode == GAME.MODE.MULTYPLAYER_NET then
         GAME.CURRENT.ONLINE = GAME.CURRENT.ONLINE or {}
@@ -3241,6 +3542,35 @@ local function initializeComponents()
     end
 
     local restoredFromResumeSnapshot = false
+    local restoredFromScenarioSnapshot = false
+    -- SCENARIO-ONLY snapshot boot path. Other modes keep existing startup flow.
+    if gameMode == GAME.MODE.SCENARIO then
+        local scenarioState = GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+        local scenarioSnapshot = scenarioState and scenarioState.snapshot or nil
+        if type(scenarioSnapshot) ~= "table" then
+            queueMainMenuOneShotNotice("Scenario Error", "Scenario data missing. Return to menu.")
+            if stateMachineRef and stateMachineRef.changeState then
+                stateMachineRef.changeState("mainMenu")
+                return
+            end
+        else
+            local restored, restoreErr = gameRuler:loadResumeSnapshot(scenarioSnapshot)
+            if not restored then
+                queueMainMenuOneShotNotice(
+                    "Scenario Error",
+                    "Scenario could not be loaded (" .. tostring(restoreErr or "unknown") .. ")."
+                )
+                if stateMachineRef and stateMachineRef.changeState then
+                    stateMachineRef.changeState("mainMenu")
+                    return
+                end
+            else
+                restoredFromScenarioSnapshot = true
+                GAME.CURRENT.TURN = gameRuler.currentTurn or GAME.CURRENT.TURN
+            end
+        end
+    end
+
     local pendingResumeSnapshot = GAME.CURRENT.PENDING_RESUME_SNAPSHOT
     if pendingResumeSnapshot and isResumeSupportedMode() and gameRuler and type(gameRuler.loadResumeSnapshot) == "function" then
         local restored, restoreErr = gameRuler:loadResumeSnapshot(pendingResumeSnapshot)
@@ -3264,9 +3594,30 @@ local function initializeComponents()
         end
     end
 
-    matchObjectiveModalVisible = not restoredFromResumeSnapshot
+    matchObjectiveModalVisible = false
     enteredFromResumeSnapshot = restoredFromResumeSnapshot
     matchObjectiveCloseButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+    onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
+    onlineAutoAdvanceState.matchObjectiveModalState = nil
+    onlineAutoAdvanceState.scenarioOutcomeModalShown = false
+    if gameMode == GAME.MODE.SCENARIO then
+        local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+        local customObjective = scenarioState and (scenarioState.objectiveMessage or scenarioState.objectiveText) or nil
+        local turnsTarget = scenarioState and tonumber(scenarioState.turnsTarget) or nil
+        local turnsText = turnsTarget and turnsTarget > 0 and tostring(math.floor(turnsTarget)) or "N#"
+        local objectiveBody = (type(customObjective) == "string" and customObjective ~= "")
+            and customObjective
+            or ("Blu to move, destroy enemy commandant in " .. turnsText .. " turns.")
+        onlineAutoAdvanceState.showMatchObjectiveModal({
+            title = "WIN CONDITIONS",
+            body = objectiveBody,
+            cta = "Play Scenario"
+        })
+    elseif (not restoredFromResumeSnapshot) and (not restoredFromScenarioSnapshot) then
+        onlineAutoAdvanceState.showMatchObjectiveModal({})
+    end
     unitCodexVisible = false
     unitCodexCloseButtonBounds = nil
     unitCodexToggleButtonBounds = nil
@@ -3866,7 +4217,7 @@ function gameplay.enter(stateMachine, prevState, params)
         grid:enter()
     end
 
-    if (gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI) and aiPlayer then
+    if (gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO) and aiPlayer then
         aiPlayer:enter(gameRuler, grid)
     end
 
@@ -3991,7 +4342,7 @@ function gameplay.update(dt)
                 aiPlayer.actionsPhaseStarted = false
                 aiPlayer.hasDeployedThisTurn = false
             end
-        elseif GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER then
+        elseif GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER or GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
             -- In single player mode, only process when it's the AI player's turn
             shouldProcessAI = (phaseInfo.currentPlayer == gameRuler.aiPlayerNumber)
                 and not gameRuler:isAnimationInProgress()
@@ -4007,7 +4358,7 @@ function gameplay.update(dt)
                 perfMetrics.endSection("ai_turn")
             end
         end
-    elseif gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI then
+    elseif gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
         if not aiPlayer then
             logger.error("GAMEPLAY", "ERROR: aiPlayer is nil!")
         end
@@ -4063,6 +4414,32 @@ function gameplay.update(dt)
         end
     end
 
+    -- SCENARIO-ONLY auto checks (outcome modal + auto pass turn if no legal actions).
+    if gameMode == GAME.MODE.SCENARIO then
+        onlineAutoAdvanceState.maybeShowScenarioOutcomeModal()
+    end
+
+    if gameMode == GAME.MODE.SCENARIO
+        and not gameplayBlocked
+        and gameRuler
+        and gameRuler.currentPhase == "turn"
+        and gameRuler.currentTurnPhase == "actions"
+        and gameRuler.currentPhase ~= "gameOver"
+        and not matchObjectiveModalVisible
+        and not unitCodexVisible
+        and not onlineEloSummaryVisible
+        and (not ConfirmDialog or type(ConfirmDialog.isActive) ~= "function" or not ConfirmDialog.isActive())
+        and (not GameLogViewer or type(GameLogViewer.isActive) ~= "function" or not GameLogViewer.isActive())
+        and not gameRuler:isAnimationInProgress() then
+        gameRuler:checkForStalledUnits()
+        if gameRuler:areActionsComplete() then
+            local ok = executeOrQueueCommand({ actionType = "end_turn" })
+            if ok then
+                clearActiveUnitSelection()
+            end
+        end
+    end
+
     applyOnlineEloUpdateIfNeeded()
     processMatchCompletionAchievementsIfNeeded()
 
@@ -4111,6 +4488,7 @@ function gameplay.draw()
         local offsetY = GAME.CONSTANTS.GRID_ORIGIN_Y
         aiInfluence:drawHeatmap(cellSize, offsetX, offsetY)
     end
+
     
     -- Draw UI if available
     if ui and ui.draw then
@@ -4127,6 +4505,9 @@ function gameplay.draw()
     drawUnitCodexOpenButton()
     drawUnitCodexOverlay()
     drawOnlineEloSummary()
+    if gameMode == GAME.MODE.SCENARIO and gameRuler and gameRuler.currentPhase == "gameOver" and ui and ui.drawConfetti then
+        ui:drawConfetti()
+    end
 
     -- Reset screen shake transform
     if screenShakeWasActive then
@@ -4216,6 +4597,10 @@ function gameplay.exit()
     onlineEloCloseButtonBounds = nil
     matchObjectiveModalVisible = false
     matchObjectiveCloseButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
+    onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+    onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
+    onlineAutoAdvanceState.matchObjectiveModalState = nil
     unitCodexVisible = false
     unitCodexCloseButtonBounds = nil
     unitCodexToggleButtonBounds = nil
@@ -4237,6 +4622,7 @@ function gameplay.exit()
     onlineAutoAdvanceState.candidateKey = nil
     onlineAutoAdvanceState.candidateSince = nil
     onlineAutoAdvanceState.issuedKey = nil
+    onlineAutoAdvanceState.scenarioOutcomeModalShown = false
 
     -- Remove this line that was resetting AI player number
     -- GAME.CURRENT.AI_PLAYER_NUMBER = 2
@@ -4351,6 +4737,11 @@ function gameplay.mousepressed(x, y, button, istouch, presses)
     local phaseInfo = gameRuler:getCurrentPhaseInfo()
 
     if phaseInfo and phaseInfo.currentPhase == "gameOver" then
+        if gameMode == GAME.MODE.SCENARIO then
+            onlineAutoAdvanceState.maybeShowScenarioOutcomeModal()
+            return true
+        end
+
         -- Track if the UI handled the click
         local handled = false
         if ui and ui.handleClickOnUI then
@@ -4487,8 +4878,31 @@ function gameplay.keypressed(key, scancode, isrepeat)
     end
 
     if hasVisibleMatchObjectiveModal() then
+        local modalState = onlineAutoAdvanceState.matchObjectiveModalState or {}
+        local hasSecondary = type(modalState.ctaSecondary) == "string" and modalState.ctaSecondary ~= ""
+        if hasSecondary then
+            local previousFocus = onlineAutoAdvanceState.matchObjectiveFocusedButton
+            if key == "left" or key == "a" or key == "up" or key == "w" then
+                onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
+                if previousFocus ~= onlineAutoAdvanceState.matchObjectiveFocusedButton and ui and ui.playButtonBeep then
+                    ui:playButtonBeep()
+                end
+                return true
+            elseif key == "right" or key == "d" or key == "down" or key == "s" or key == "tab" then
+                onlineAutoAdvanceState.matchObjectiveFocusedButton = "secondary"
+                if previousFocus ~= onlineAutoAdvanceState.matchObjectiveFocusedButton and ui and ui.playButtonBeep then
+                    ui:playButtonBeep()
+                end
+                return true
+            end
+        end
+        if key == "return" or key == "space" then
+            local dismissAction = (hasSecondary and onlineAutoAdvanceState.matchObjectiveFocusedButton == "secondary") and "secondary" or "primary"
+            dismissMatchObjectiveModal("key_close", dismissAction)
+            return true
+        end
         if isMatchObjectiveCloseKey(key) then
-            dismissMatchObjectiveModal("key_close")
+            dismissMatchObjectiveModal("key_cancel_close", "primary")
             return true
         end
         -- Keep objective modal focus locked until closed.
@@ -4582,6 +4996,11 @@ function gameplay.keypressed(key, scancode, isrepeat)
 
     -- Handle game over screen - this is the only place that should handle game over keyboard input
     if gameRuler and gameRuler.currentPhase == "gameOver" then
+        if gameMode == GAME.MODE.SCENARIO then
+            onlineAutoAdvanceState.maybeShowScenarioOutcomeModal()
+            return true
+        end
+
         -- ESC key goes to main menu with confirmation
         if key == "escape" then
             ConfirmDialog.show(
@@ -5097,7 +5516,42 @@ function gameplay.keypressed(key, scancode, isrepeat)
                     end
                 elseif key == "right" or key == "d" then
                     if newCol == GAME.CONSTANTS.GRID_SIZE then
-                        if allowReadOnlyTurn then
+                        if gameMode == GAME.MODE.SCENARIO and ui then
+                            ui:initializeUIElements()
+                            local scenarioTargetName = (newRow >= 5) and "scenarioRetryButton" or "scenarioBackButton"
+                            local scenarioTargetIndex = nil
+
+                            for i, element in ipairs(ui.uiElements) do
+                                if element.type == "button" and element.name == scenarioTargetName then
+                                    scenarioTargetIndex = i
+                                    break
+                                end
+                            end
+
+                            if not scenarioTargetIndex then
+                                for i, element in ipairs(ui.uiElements) do
+                                    if element.type == "button" and (element.name == "scenarioBackButton" or element.name == "scenarioRetryButton") then
+                                        scenarioTargetIndex = i
+                                        break
+                                    end
+                                end
+                            end
+
+                            if scenarioTargetIndex then
+                                ui.navigationMode = "ui"
+                                ui.uIkeyboardNavigationActive = true
+                                HOVER_INDICATOR_STATE.IS_HIDDEN = true
+                                ui.currentUIElementIndex = scenarioTargetIndex
+                                ui.activeUIElement = ui.uiElements[scenarioTargetIndex]
+                                ui:clearHoveredInfo()
+                                ui:setContent(nil)
+                                ui:syncKeyboardAndMouseFocus()
+                                return true
+                            end
+
+                            HOVER_INDICATOR_STATE.IS_HIDDEN = false
+                            newCol = GAME.CONSTANTS.GRID_SIZE
+                        elseif allowReadOnlyTurn then
                             -- Non-local online turn: keep board read-only and optionally
                             -- allow quick access to surrender from lower-right area.
                             if newRow >= 5 and newRow <= 8 and ui then

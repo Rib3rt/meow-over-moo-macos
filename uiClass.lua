@@ -58,10 +58,14 @@ function uiClass.new(params)
     local self = setmetatable({}, uiClass)
 
     self.unitsInfo = unitsInfo
+    self.hideSupplyPanels = params.hideSupplyPanels == true
+    self.suppressGameOverPanel = params.suppressGameOverPanel == true
     self.gameRuler = params.gameRuler or nil
     self.stateMachineRef = params.stateMachine or nil
     self.onSurrenderRequested = params.onSurrenderRequested
     self.onOnlineReactionRequested = params.onOnlineReactionRequested
+    self.onScenarioBackRequested = params.onScenarioBackRequested
+    self.onScenarioRetryRequested = params.onScenarioRetryRequested
     self.onlineReactionButtons = {
         cooldownUntil = 0,
         buttons = {},
@@ -168,6 +172,14 @@ function uiClass.new(params)
     self.keyboardNavInitiated = false
 
     self.surrenderButton = self:createDefaultSurrenderButton()
+    self.scenarioControlPanel = nil
+    self.scenarioObjectivePanel = nil
+    self.scenarioObjectiveCommandantSprite = nil
+    self.scenarioObjectiveSpritePath = nil
+    self.scenarioBackButton = self:createDefaultScenarioControlButton("BACK", "back")
+    self.scenarioRetryButton = self:createDefaultScenarioControlButton("RETRY", "retry")
+    self.lastScenarioBackButtonHover = false
+    self.lastScenarioRetryButtonHover = false
 
     local success, image = pcall(love.graphics.newImage, "assets/sprites/selectionPointer.png")
     if success then
@@ -334,6 +346,25 @@ function uiClass:createDefaultSurrenderButton()
     }
 end
 
+function uiClass:createDefaultScenarioControlButton(text, variant)
+    local isRetry = variant == "retry"
+    local normalColor = isRetry and {0.8, 0.2, 0.2, 0.9} or {0.2, 0.4, 0.8, 0.9}
+    local hoverColor = isRetry and {0.9, 0.3, 0.3, 0.95} or {0.3, 0.5, 0.9, 0.95}
+    local pressedColor = isRetry and {0.6, 0.15, 0.15, 0.9} or {0.15, 0.3, 0.6, 0.9}
+
+    return {
+        x = 0,
+        y = 0,
+        width = 0,
+        height = 0,
+        text = text,
+        normalColor = normalColor,
+        hoverColor = hoverColor,
+        pressedColor = pressedColor,
+        currentColor = cloneColor(normalColor)
+    }
+end
+
 --------------------------------------------------
 -- ACCESSOR / UTILITY METHODS
 --------------------------------------------------
@@ -478,6 +509,235 @@ function uiClass:getNowSeconds()
         return os.clock()
     end
     return 0
+end
+
+function uiClass:isScenarioControlPanelEnabled()
+    return self.hideSupplyPanels == true
+        and GAME
+        and GAME.CURRENT
+        and GAME.MODE
+        and GAME.CURRENT.MODE == GAME.MODE.SCENARIO
+end
+
+function uiClass:updateScenarioControlLayout()
+    if not self:isScenarioControlPanelEnabled() then
+        return false
+    end
+
+    local panelX = SETTINGS.DISPLAY.WIDTH - 250
+    local panelY = 50
+    local panelWidth = 220
+    local panelHeight = 260
+
+    self.scenarioControlPanel = self.scenarioControlPanel or {}
+    self.scenarioControlPanel.x = panelX
+    self.scenarioControlPanel.y = panelY
+    self.scenarioControlPanel.width = panelWidth
+    self.scenarioControlPanel.height = panelHeight
+
+    self.scenarioBackButton = self.scenarioBackButton or self:createDefaultScenarioControlButton("BACK", "back")
+    self.scenarioRetryButton = self.scenarioRetryButton or self:createDefaultScenarioControlButton("RETRY", "retry")
+
+    local padding = 12
+    local spacing = 10
+    local buttonHeight = 34
+    local buttonY = panelY + panelHeight - buttonHeight - 16
+    local buttonWidth = math.floor((panelWidth - (padding * 2) - spacing) / 2)
+
+    self.scenarioBackButton.x = panelX + padding
+    self.scenarioBackButton.y = buttonY
+    self.scenarioBackButton.width = buttonWidth
+    self.scenarioBackButton.height = buttonHeight
+    if not self.scenarioBackButton.currentColor then
+        self.scenarioBackButton.currentColor = cloneColor(self.scenarioBackButton.normalColor)
+    end
+
+    self.scenarioRetryButton.x = self.scenarioBackButton.x + buttonWidth + spacing
+    self.scenarioRetryButton.y = buttonY
+    self.scenarioRetryButton.width = buttonWidth
+    self.scenarioRetryButton.height = buttonHeight
+    if not self.scenarioRetryButton.currentColor then
+        self.scenarioRetryButton.currentColor = cloneColor(self.scenarioRetryButton.normalColor)
+    end
+
+    return true
+end
+
+function uiClass:updateScenarioObjectiveLayout()
+    if not self:isScenarioControlPanelEnabled() then
+        return false
+    end
+
+    local panelX = 30
+    local panelY = 50
+    local panelWidth = 220
+    local panelHeight = 260
+
+    self.scenarioObjectivePanel = self.scenarioObjectivePanel or {}
+    self.scenarioObjectivePanel.x = panelX
+    self.scenarioObjectivePanel.y = panelY
+    self.scenarioObjectivePanel.width = panelWidth
+    self.scenarioObjectivePanel.height = panelHeight
+    return true
+end
+
+function uiClass:ensureScenarioObjectiveCommandantSprite()
+    if self.scenarioObjectiveCommandantSprite then
+        return self.scenarioObjectiveCommandantSprite
+    end
+
+    local spritePath = "assets/sprites/Blu_General.png"
+    local commandantInfo = self.unitsInfo and self.unitsInfo.getUnitInfo and self.unitsInfo:getUnitInfo("Commandant") or nil
+    if type(commandantInfo) == "table" then
+        spritePath = commandantInfo.pathUiIcon or commandantInfo.path or spritePath
+    end
+
+    local ok, image = pcall(love.graphics.newImage, spritePath)
+    if ok and image then
+        self.scenarioObjectiveCommandantSprite = image
+        self.scenarioObjectiveSpritePath = spritePath
+        return image
+    end
+
+    return nil
+end
+
+function uiClass:getScenarioAttemptsCount()
+    local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    local attempts = tonumber(scenarioState and scenarioState.attempts) or 0
+    return math.max(0, math.floor(attempts))
+end
+
+function uiClass:getScenarioCode()
+    local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    local code = scenarioState and tostring(scenarioState.id or "") or ""
+    if code == "" then
+        return "---"
+    end
+    return code
+end
+
+function uiClass:getScenarioWinningConditionsText()
+    local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    local objectiveText = scenarioState and (scenarioState.objectiveMessage or scenarioState.objectiveText) or nil
+    if type(objectiveText) == "string" and objectiveText ~= "" then
+        local normalized = objectiveText
+            :gsub("Rounds", "Turns")
+            :gsub("Round", "Turn")
+            :gsub("rounds", "turns")
+            :gsub("round", "turn")
+            :gsub("^%s*[Bb][Ll][Uu][Ee]?%s+to%s+move[,%.:%-]*%s*", "Winning conditions: ")
+        return normalized
+    end
+
+    local turnsTarget = scenarioState and tonumber(scenarioState.turnsTarget) or nil
+    local turnsText = turnsTarget and turnsTarget > 0 and tostring(math.floor(turnsTarget)) or "N#"
+    return "Winning conditions: destroy enemy commandant in " .. turnsText .. " turns."
+end
+
+function uiClass:getScenarioElapsedSeconds()
+    local timer = self.gameRuler and self.gameRuler.gameTimer or nil
+    if type(timer) ~= "table" then
+        return 0
+    end
+
+    local elapsed
+    if timer.isRunning then
+        elapsed = tonumber(timer.runningDuration)
+        if not elapsed then
+            local startTime = tonumber(timer.startTime) or self:getNowSeconds()
+            elapsed = self:getNowSeconds() - startTime
+        end
+    else
+        elapsed = tonumber(timer.totalGameTime) or tonumber(timer.runningDuration)
+    end
+
+    return math.max(0, elapsed or 0)
+end
+
+function uiClass:formatElapsedClock(totalSeconds)
+    local rounded = math.max(0, math.floor(tonumber(totalSeconds) or 0))
+    local minutes = math.floor(rounded / 60)
+    local seconds = rounded % 60
+    return string.format("%02d:%02d", minutes, seconds)
+end
+
+function uiClass:triggerScenarioBackAction()
+    if not self:isScenarioControlPanelEnabled() then
+        return false
+    end
+
+    ConfirmDialog.show(
+        "Back to scenario list?",
+        function()
+            local handled = false
+            if type(self.onScenarioBackRequested) == "function" then
+                handled = self.onScenarioBackRequested() ~= false
+            end
+            if not handled and self.stateMachineRef and self.stateMachineRef.changeState then
+                self.stateMachineRef.changeState("scenarioSelect")
+            end
+        end,
+        function() end
+    )
+    return true
+end
+
+function uiClass:triggerScenarioRetryAction()
+    if not self:isScenarioControlPanelEnabled() then
+        return false
+    end
+
+    ConfirmDialog.show(
+        "Retry this scenario from the start?",
+        function()
+            local handled = false
+            if type(self.onScenarioRetryRequested) == "function" then
+                handled = self.onScenarioRetryRequested() ~= false
+            end
+            if handled then
+                return
+            end
+
+            local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+            if type(scenarioState) == "table" then
+                scenarioState.attempts = math.max(0, tonumber(scenarioState.attempts) or 0) + 1
+                scenarioState.solved = false
+            end
+            if GAME and GAME.CURRENT and GAME.MODE then
+                GAME.CURRENT.SCENARIO_RESULT = nil
+                GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
+                GAME.CURRENT.MODE = GAME.MODE.SCENARIO
+            end
+            if self.stateMachineRef and self.stateMachineRef.changeState then
+                self.stateMachineRef.changeState("scenarioGameplay")
+            end
+        end,
+        function() end
+    )
+    return true
+end
+
+function uiClass:handleScenarioControlButtonsClick(mouseX, mouseY)
+    if not self:updateScenarioControlLayout() then
+        return false
+    end
+
+    if self.scenarioBackButton
+        and mouseX >= self.scenarioBackButton.x and mouseX <= self.scenarioBackButton.x + self.scenarioBackButton.width
+        and mouseY >= self.scenarioBackButton.y and mouseY <= self.scenarioBackButton.y + self.scenarioBackButton.height then
+        self:activateButtonAnimation(self.scenarioBackButton)
+        return self:triggerScenarioBackAction()
+    end
+
+    if self.scenarioRetryButton
+        and mouseX >= self.scenarioRetryButton.x and mouseX <= self.scenarioRetryButton.x + self.scenarioRetryButton.width
+        and mouseY >= self.scenarioRetryButton.y and mouseY <= self.scenarioRetryButton.y + self.scenarioRetryButton.height then
+        self:activateButtonAnimation(self.scenarioRetryButton)
+        return self:triggerScenarioRetryAction()
+    end
+
+    return false
 end
 
 function uiClass:canShowOnlineReactionButtons(phaseInfo)
@@ -1216,6 +1476,60 @@ function uiClass:handleMouseMovement(mouseX, mouseY, grid)
         end
     end
 
+    local scenarioPanelActive = (not inGameOver) and self:updateScenarioControlLayout()
+    local scenarioObjectivePanelActive = (not inGameOver) and self:updateScenarioObjectiveLayout()
+    if scenarioObjectivePanelActive and self.scenarioObjectivePanel then
+        local objectivePanel = self.scenarioObjectivePanel
+        if mouseX >= objectivePanel.x and mouseX <= objectivePanel.x + objectivePanel.width and
+           mouseY >= objectivePanel.y and mouseY <= objectivePanel.y + objectivePanel.height then
+            isHoveringUIElement = true
+        end
+    end
+    if scenarioPanelActive then
+        local scenarioPanel = self.scenarioControlPanel
+        if mouseX >= scenarioPanel.x and mouseX <= scenarioPanel.x + scenarioPanel.width and
+           mouseY >= scenarioPanel.y and mouseY <= scenarioPanel.y + scenarioPanel.height then
+            isHoveringUIElement = true
+        end
+
+        local function updateScenarioButtonHover(button, elementName, hoverFlagName)
+            local isMouseOver = mouseX >= button.x and mouseX <= button.x + button.width and
+                mouseY >= button.y and mouseY <= button.y + button.height
+            local isKeyboardFocused = self.uIkeyboardNavigationActive and self.activeUIElement and
+                self.activeUIElement.name == elementName
+            local isHovered = isMouseOver or isKeyboardFocused
+
+            if isHovered then
+                button.currentColor = button.hoverColor
+                if isMouseOver then
+                    isHoveringUIElement = true
+                end
+                if isMouseOver and not self[hoverFlagName] then
+                    self:playButtonBeep()
+                    self[hoverFlagName] = true
+                end
+            else
+                button.currentColor = button.normalColor
+            end
+
+            if not isMouseOver and not isKeyboardFocused then
+                self[hoverFlagName] = false
+            end
+        end
+
+        updateScenarioButtonHover(self.scenarioBackButton, "scenarioBackButton", "lastScenarioBackButtonHover")
+        updateScenarioButtonHover(self.scenarioRetryButton, "scenarioRetryButton", "lastScenarioRetryButtonHover")
+    else
+        if self.scenarioBackButton then
+            self.scenarioBackButton.currentColor = self.scenarioBackButton.normalColor
+        end
+        if self.scenarioRetryButton then
+            self.scenarioRetryButton.currentColor = self.scenarioRetryButton.normalColor
+        end
+        self.lastScenarioBackButtonHover = false
+        self.lastScenarioRetryButtonHover = false
+    end
+
     local phaseInfo = self.gameRuler and self.gameRuler.getCurrentPhaseInfo and self.gameRuler:getCurrentPhaseInfo() or nil
     if not inGameOver and self:canShowOnlineReactionButtons(phaseInfo) then
         local hoveredReactionName = nil
@@ -1499,6 +1813,10 @@ function uiClass:handleClickOnUI(mouseX, mouseY)
 
             return true
         end
+    end
+
+    if not inGameOver and self:handleScenarioControlButtonsClick(mouseX, mouseY) then
+        return true
     end
 
     -- Check for surrender button click
@@ -2203,6 +2521,186 @@ function uiClass:drawSurrenderPanel()
 
     -- Use the standard panel function
     self:drawStandardPanel(panelX, panelY, panelWidth, panelHeight, "CALL", contentDrawFunc)
+end
+
+function uiClass:drawScenarioControlPanel()
+    if not self:updateScenarioControlLayout() then
+        return
+    end
+
+    local panel = self.scenarioControlPanel
+    local scenarioCode = self:getScenarioCode()
+    local attempts = self:getScenarioAttemptsCount()
+    local elapsedClock = self:formatElapsedClock(self:getScenarioElapsedSeconds())
+
+    local function drawScenarioButton(button, buttonName)
+        local isKeyboardFocused = self.uIkeyboardNavigationActive
+            and self.activeUIElement
+            and self.activeUIElement.name == buttonName
+        local isMouseHovered = (
+            button.currentColor[1] == button.hoverColor[1]
+            and button.currentColor[2] == button.hoverColor[2]
+            and button.currentColor[3] == button.hoverColor[3]
+            and button.currentColor[4] == button.hoverColor[4]
+        )
+
+        love.graphics.setColor(button.currentColor)
+        love.graphics.rectangle("fill", button.x, button.y, button.width, button.height, 6)
+
+        if isMouseHovered or isKeyboardFocused then
+            love.graphics.setColor(255/255, 240/255, 220/255, 0.8)
+            love.graphics.setLineWidth(2.5)
+        else
+            love.graphics.setColor(button.normalColor[1], button.normalColor[2], button.normalColor[3], 0.9)
+            love.graphics.setLineWidth(1.4)
+        end
+        love.graphics.rectangle("line", button.x, button.y, button.width, button.height, 6)
+        love.graphics.setLineWidth(1)
+
+        if isMouseHovered or isKeyboardFocused then
+            love.graphics.setColor(1, 1, 1, 0.2)
+            love.graphics.rectangle("line", button.x + 2, button.y + 2, button.width - 4, button.height - 4, 4)
+        end
+
+        local defaultFont = love.graphics.getFont()
+        local buttonFont = getMonogramFont(SETTINGS.FONT.TITLE_SIZE)
+        love.graphics.setFont(buttonFont)
+        love.graphics.setColor(1, 1, 1, 0.95)
+        love.graphics.printf(button.text or "", button.x, button.y + (button.height - buttonFont:getHeight()) / 2, button.width, "center")
+        love.graphics.setFont(defaultFont)
+    end
+
+    local contentDrawFunc = function(x, y, width, height, colors)
+        local defaultFont = love.graphics.getFont()
+        local labelFont = getMonogramFont(SETTINGS.FONT.TITLE_SIZE)
+        local valueFont = getMonogramFont(SETTINGS.FONT.DEFAULT_SIZE)
+        local rows = {
+            { label = "CODE", value = tostring(scenarioCode) },
+            { label = "ATTEMPTS", value = tostring(attempts) },
+            { label = "TIMER", value = elapsedClock }
+        }
+        local rowX = x + 12
+        local rowW = width - 24
+        local rowH = 42
+        local rowGap = 10
+        local startY = y + 44
+
+        for i, row in ipairs(rows) do
+            local rowY = startY + (i - 1) * (rowH + rowGap)
+
+            love.graphics.setColor(0.12, 0.1, 0.08, 0.55)
+            love.graphics.rectangle("fill", rowX, rowY, rowW, rowH, 6)
+            love.graphics.setColor(colors.highlight[1], colors.highlight[2], colors.highlight[3], 0.85)
+            love.graphics.rectangle("line", rowX + 1, rowY + 1, rowW - 2, rowH - 2, 5)
+
+            love.graphics.setFont(labelFont)
+            love.graphics.setColor(colors.text[1], colors.text[2], colors.text[3], 0.9)
+            love.graphics.print(row.label, rowX + 10, rowY + 6)
+
+            love.graphics.setFont(valueFont)
+            love.graphics.setColor(1, 1, 1, 0.96)
+            love.graphics.printf(row.value, rowX + 8, rowY + 20, rowW - 16, "right")
+        end
+
+        drawScenarioButton(self.scenarioBackButton, "scenarioBackButton")
+        drawScenarioButton(self.scenarioRetryButton, "scenarioRetryButton")
+
+        love.graphics.setFont(defaultFont)
+    end
+
+    self:drawStandardPanel(panel.x, panel.y, panel.width, panel.height, "SCENARIO", contentDrawFunc)
+end
+
+function uiClass:drawScenarioObjectivePanel()
+    if not self:updateScenarioObjectiveLayout() then
+        return
+    end
+
+    local panel = self.scenarioObjectivePanel
+    local sprite = self:ensureScenarioObjectiveCommandantSprite()
+    local objectiveText = self:getScenarioWinningConditionsText()
+
+    local bubbleColor = {240/255, 248/255, 255/255, 0.95}
+    local bubbleOutline = {60/255, 80/255, 120/255, 1.0}
+    local textColor = {40/255, 40/255, 60/255, 1.0}
+
+    local spriteScaleX = 0.2
+    local spriteScaleY = 0.2
+    local spriteX = panel.x + 48
+    local spriteY = panel.y + panel.height - 98
+    local scaledSpriteW = 0
+    local scaledSpriteH = 0
+
+    local referenceSpriteScale = 0.2
+    local targetSpriteW = 112
+    local targetSpriteH = 90
+    if not self.bluRadioSprite then
+        local ok, img = pcall(love.graphics.newImage, "assets/sprites/Blu_Radio.png")
+        if ok and img then
+            self.bluRadioSprite = img
+        end
+    end
+    if self.bluRadioSprite then
+        targetSpriteW = self.bluRadioSprite:getWidth() * referenceSpriteScale
+        targetSpriteH = self.bluRadioSprite:getHeight() * referenceSpriteScale
+    end
+
+    if sprite then
+        spriteScaleX = targetSpriteW / sprite:getWidth()
+        spriteScaleY = targetSpriteH / sprite:getHeight()
+        scaledSpriteW = targetSpriteW
+        scaledSpriteH = targetSpriteH
+        spriteX = panel.x + (panel.width - scaledSpriteW) / 2
+        local spriteBottomPadding = 6
+        local spriteDropOffset = 24
+        spriteY = panel.y + panel.height - scaledSpriteH - spriteBottomPadding + spriteDropOffset
+    end
+
+    local bubbleYOffset = -24
+    local bubbleX = panel.x + 15
+    local bubbleY = panel.y + 15 + bubbleYOffset
+    local bubbleW = panel.width - 30
+    local bubbleH = (sprite and (spriteY - bubbleY - 11)) or (panel.height - 30)
+    if bubbleH < 92 then
+        bubbleH = 92
+    end
+
+    love.graphics.setColor(bubbleColor)
+    love.graphics.rectangle("fill", bubbleX, bubbleY, bubbleW, bubbleH, 15)
+
+    love.graphics.setColor(bubbleOutline)
+    love.graphics.setLineWidth(3)
+    love.graphics.rectangle("line", bubbleX, bubbleY, bubbleW, bubbleH, 15)
+
+    local tailCenterX = bubbleX + bubbleW / 2 + self.bubbleTriangle.offsetX
+    local tailCenterY = bubbleY + bubbleH + self.bubbleTriangle.offsetY
+    love.graphics.push()
+    love.graphics.translate(tailCenterX, tailCenterY)
+    love.graphics.scale(self.bubbleTriangle.scale, self.bubbleTriangle.scale)
+    love.graphics.translate(-tailCenterX, -tailCenterY)
+    local tailPoints = {
+        tailCenterX - 12, bubbleY + bubbleH,
+        tailCenterX, tailCenterY + 15,
+        tailCenterX + 12, bubbleY + bubbleH
+    }
+    love.graphics.polygon("fill", tailPoints)
+    love.graphics.polygon("line", tailPoints)
+    love.graphics.pop()
+
+    local defaultFont = love.graphics.getFont()
+    local bubbleTextFont = getMonogramFont(SETTINGS.FONT.DEFAULT_SIZE)
+    love.graphics.setFont(bubbleTextFont)
+    love.graphics.setColor(textColor)
+    love.graphics.printf(objectiveText, bubbleX + 12, bubbleY + 8, bubbleW - 24, "left")
+    love.graphics.setFont(defaultFont)
+
+    if sprite then
+        love.graphics.setColor(1, 1, 1, 1)
+        -- Flip horizontally so the Commandant faces inward.
+        love.graphics.draw(sprite, spriteX + scaledSpriteW, spriteY, 0, -spriteScaleX, spriteScaleY)
+    end
+
+    love.graphics.setLineWidth(1)
 end
 
 function uiClass:drawLogPanel(gameRuler)
@@ -3687,6 +4185,12 @@ function uiClass:drawPhaseButtonStandard(x, y, width, height, phaseInfo, colors)
     -- Don't show phase button if game is over
     if phaseInfo.currentPhase == "gameOver" then
         self.phaseButton = nil
+        return
+    end
+
+    if GAME and GAME.CURRENT and GAME.MODE and GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
+        self.phaseButton = nil
+        self.pulsing.active = false
         return
     end
 
@@ -5580,9 +6084,14 @@ function uiClass:draw(gameRuler)
     -- Clear unit positions for fresh drawing
     self.unitPositions = {}
 
-    -- Draw supply panels
-    self:drawSupplyPanel(30, 50, 220, 260, 1, self.playerSupply1)
-    self:drawSupplyPanel(SETTINGS.DISPLAY.WIDTH - 250, 50, 220, 260, 2, self.playerSupply2)
+    if not self.hideSupplyPanels then
+        -- Draw supply panels
+        self:drawSupplyPanel(30, 50, 220, 260, 1, self.playerSupply1)
+        self:drawSupplyPanel(SETTINGS.DISPLAY.WIDTH - 250, 50, 220, 260, 2, self.playerSupply2)
+    elseif self:isScenarioControlPanelEnabled() then
+        self:drawScenarioObjectivePanel()
+        self:drawScenarioControlPanel()
+    end
 
     -- Draw the info panel
     self:drawUnitInfoPanel()
@@ -5593,7 +6102,9 @@ function uiClass:draw(gameRuler)
 
     if gameRuler then
         self:drawUnitActionArrows(gameRuler)
-        self:drawSupplyUnitArrows(gameRuler)
+        if not self.hideSupplyPanels then
+            self:drawSupplyUnitArrows(gameRuler)
+        end
     end
 
     -- Draw phase info
@@ -5614,7 +6125,7 @@ function uiClass:draw(gameRuler)
     -- Draw the new log panel
     self:drawLogPanel(gameRuler)
 
-    if self.gameRuler and self.gameRuler.currentPhase == "gameOver" then
+    if self.gameRuler and self.gameRuler.currentPhase == "gameOver" and not self.suppressGameOverPanel then
         self:drawGameOverPanel()
     end
 
@@ -5752,6 +6263,32 @@ function uiClass:initializeUIElements()
                     self.phaseButton.x + self.phaseButton.width / 2,
                     self.phaseButton.y + self.phaseButton.height / 2
                 )
+            end
+        })
+    end
+
+    if self:updateScenarioControlLayout()
+        and (not self.gameRuler or self.gameRuler.currentPhase ~= "gameOver") then
+        table.insert(self.uiElements, {
+            type = "button",
+            name = "scenarioBackButton",
+            x = self.scenarioBackButton.x,
+            y = self.scenarioBackButton.y,
+            width = self.scenarioBackButton.width,
+            height = self.scenarioBackButton.height,
+            action = function()
+                return self:triggerScenarioBackAction()
+            end
+        })
+        table.insert(self.uiElements, {
+            type = "button",
+            name = "scenarioRetryButton",
+            x = self.scenarioRetryButton.x,
+            y = self.scenarioRetryButton.y,
+            width = self.scenarioRetryButton.width,
+            height = self.scenarioRetryButton.height,
+            action = function()
+                return self:triggerScenarioRetryAction()
             end
         })
     end
@@ -6156,8 +6693,63 @@ function uiClass:navigateUI(key)
         local currentElement = self.uiElements[self.currentUIElementIndex]
         if not currentElement then return false end
 
+        -- Scenario panel controls: keyboard navigation between panel buttons and grid.
+        if currentElement.name == "scenarioBackButton" or currentElement.name == "scenarioRetryButton" then
+            local function focusScenarioButton(buttonName)
+                for i, element in ipairs(self.uiElements) do
+                    if element.name == buttonName then
+                        self:resetButtonHighlights()
+                        self.currentUIElementIndex = i
+                        self.activeUIElement = self.uiElements[i]
+                        self:syncKeyboardAndMouseFocus()
+                        return true
+                    end
+                end
+                return false
+            end
+
+            local function switchToGridFromScenarioPanel()
+                self:resetButtonHighlights()
+                self:clearHoveredInfo()
+                self.navigationMode = "grid"
+                self.uIkeyboardNavigationActive = false
+                self.forceInfoPanelDefault = false
+                self.currentUIElementIndex = nil
+                self.activeUIElement = nil
+                self:clearGameLogPanelHover()
+
+                if self.gameRuler and self.gameRuler.currentGrid then
+                    self.gameRuler.currentGrid.keyboardSelectedCell = { row = 4, col = 8 }
+                    local cell = self.gameRuler.currentGrid:getCell(4, 8)
+                    if cell then
+                        self.gameRuler.currentGrid.mouseHoverCell = nil
+                        self.gameRuler.currentGrid:showHoverIndicator(cell)
+                    end
+                    self.gameRuler.currentGrid.uiNavigationActive = false
+                    HOVER_INDICATOR_STATE.IS_HIDDEN = false
+                end
+                return true
+            end
+
+            if key == "right" or key == "d" then
+                if currentElement.name == "scenarioBackButton" then
+                    return focusScenarioButton("scenarioRetryButton")
+                end
+                return false
+            elseif key == "left" or key == "a" then
+                if currentElement.name == "scenarioRetryButton" then
+                    return focusScenarioButton("scenarioBackButton")
+                end
+                return switchToGridFromScenarioPanel()
+            elseif key == "up" or key == "w" or key == "down" or key == "s" then
+                if currentElement.name == "scenarioBackButton" then
+                    return focusScenarioButton("scenarioRetryButton")
+                end
+                return focusScenarioButton("scenarioBackButton")
+            end
+            return false
         -- Special handling for phase button (non-grid element)
-        if currentElement.name == "phaseButton" then
+        elseif currentElement.name == "phaseButton" then
             if key == "up" or key == "w" then
                 -- RESET HIGHLIGHTS FIRST
                 self:resetButtonHighlights()
@@ -7035,6 +7627,15 @@ function uiClass:resetButtonHighlights()
         self.surrenderButton.currentColor = self.surrenderButton.normalColor
     end
 
+    if self.scenarioBackButton then
+        self.scenarioBackButton.currentColor = self.scenarioBackButton.normalColor
+    end
+    if self.scenarioRetryButton then
+        self.scenarioRetryButton.currentColor = self.scenarioRetryButton.normalColor
+    end
+    self.lastScenarioBackButtonHover = false
+    self.lastScenarioRetryButtonHover = false
+
     for _, button in ipairs(self:getOnlineReactionButtons()) do
         button.currentColor = cloneColor(button.normalColor)
         button.focused = false
@@ -7070,6 +7671,10 @@ function uiClass:drawKeyboardNavigationHighlight()
             self.phaseButton.currentColor = self.phaseButton.hoverColor
         elseif element.name == "surrenderButton" and self.surrenderButton then
             self.surrenderButton.currentColor = self.surrenderButton.hoverColor
+        elseif element.name == "scenarioBackButton" and self.scenarioBackButton then
+            self.scenarioBackButton.currentColor = self.scenarioBackButton.hoverColor
+        elseif element.name == "scenarioRetryButton" and self.scenarioRetryButton then
+            self.scenarioRetryButton.currentColor = self.scenarioRetryButton.hoverColor
         elseif self:isReactionButtonName(element.name) then
             local reactionButton = self:getOnlineReactionButtonByName(element.name)
             if reactionButton and reactionButton.disabledVisual ~= true then

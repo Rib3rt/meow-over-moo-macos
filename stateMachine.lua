@@ -8,6 +8,11 @@ local states = {
     onlineLobby = require("onlineLobby"),       -- require the onlineLobby.lua file
     onlineLeaderboard = require("onlineLeaderboard"), -- require the onlineLeaderboard.lua file
 }
+if SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_MODE then
+    states.scenarioSelect = require("scenarioSelect")
+    states.scenarioGameplay = require("scenarioGameplay")
+    states.scenarioEditor = require("scenarioEditor")
+end
 local inputBindings = require("input_bindings")
 local steamRuntime = require("steam_runtime")
 local ConfirmDialog = require("confirmDialog")
