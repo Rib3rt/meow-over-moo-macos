@@ -2,6 +2,7 @@ local onlineLobby = {}
 
 local ConfirmDialog = require("confirmDialog")
 local uiTheme = require("uiTheme")
+local menuBackground = require("menu_background")
 local steamRuntime = require("steam_runtime")
 local onlineRatingStore = require("online_rating_store")
 local Controller = require("controller")
@@ -1627,8 +1628,7 @@ function onlineLobby.draw()
     love.graphics.translate(SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY)
     love.graphics.scale(SETTINGS.DISPLAY.SCALE)
 
-    love.graphics.setColor(uiTheme.COLORS.background)
-    love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
+    menuBackground.draw()
 
     local panelX, panelY, panelWidth, panelHeight = getListRect()
     uiTheme.drawTechPanel(panelX, panelY, panelWidth, panelHeight)

@@ -145,6 +145,51 @@ function uiTheme.drawTitle(text, x, y, width)
     love.graphics.line(x + (width - textWidth) / 2, lineY, x + (width + textWidth) / 2, lineY)
 end
 
+local function transformButtonText(text, button)
+    local safeText = (type(text) == "string") and text or ""
+    if type(button) ~= "table" then
+        return safeText
+    end
+
+    if button.textTransform == "uppercase" then
+        return string.upper(safeText)
+    end
+    if button.textTransform == "lowercase" then
+        return string.lower(safeText)
+    end
+    return safeText
+end
+
+local function drawCenteredTrackedText(text, x, y, width, letterSpacing)
+    local safeText = (type(text) == "string") and text or ""
+    local len = #safeText
+    if len == 0 then
+        return
+    end
+
+    local font = love.graphics.getFont()
+    local spacing = tonumber(letterSpacing) or 0
+    if spacing <= 0 or len == 1 then
+        love.graphics.printf(safeText, x, y, width, "center")
+        return
+    end
+
+    local totalWidth = 0
+    for i = 1, len do
+        totalWidth = totalWidth + font:getWidth(safeText:sub(i, i))
+        if i < len then
+            totalWidth = totalWidth + spacing
+        end
+    end
+
+    local cursorX = x + ((width - totalWidth) * 0.5)
+    for i = 1, len do
+        local ch = safeText:sub(i, i)
+        love.graphics.print(ch, cursorX, y)
+        cursorX = cursorX + font:getWidth(ch) + spacing
+    end
+end
+
 function uiTheme.drawButton(button)
     if not button then return end
 
@@ -182,13 +227,13 @@ function uiTheme.drawButton(button)
     )
 
     love.graphics.setColor(button.textColor or colors.text)
-    local text = button.text or ""
+    local text = transformButtonText(button.text or "", button)
     local textOffsetY = button.textOffsetY
     if textOffsetY == nil and button.centerText == true then
         textOffsetY = (button.height - love.graphics.getFont():getHeight()) / 2
     end
     textOffsetY = textOffsetY or 15
-    love.graphics.printf(text, button.x, button.y + textOffsetY, button.width, "center")
+    drawCenteredTrackedText(text, button.x, button.y + textOffsetY, button.width, button.letterSpacing)
 end
 
 function uiTheme.applyButtonVariant(button, variantName)

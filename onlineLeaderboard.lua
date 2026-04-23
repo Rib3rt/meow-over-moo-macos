@@ -2,6 +2,7 @@ local onlineLeaderboard = {}
 
 local ConfirmDialog = require("confirmDialog")
 local uiTheme = require("uiTheme")
+local menuBackground = require("menu_background")
 local steamRuntime = require("steam_runtime")
 local onlineRatingStore = require("online_rating_store")
 local soundCache = require("soundCache")
@@ -555,8 +556,7 @@ function onlineLeaderboard.draw()
     love.graphics.translate(SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY)
     love.graphics.scale(SETTINGS.DISPLAY.SCALE)
 
-    love.graphics.setColor(uiTheme.COLORS.background)
-    love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
+    menuBackground.draw()
 
     local topPanelX = LAYOUT.panelMarginX
     local topPanelY = LAYOUT.topPanelY

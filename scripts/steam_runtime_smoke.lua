@@ -1369,11 +1369,12 @@ for _, result in ipairs(results) do
         passed = passed + 1
     end
 end
+local failed = #results - passed
 
 print("# Steam Runtime Smoke Report")
 print("")
 print("- Passed: " .. tostring(passed))
-print("- Failed: " .. tostring(#results - passed))
+print("- Failed: " .. tostring(failed))
 print("")
 for _, result in ipairs(results) do
     local status = result.ok and "PASS" or "FAIL"

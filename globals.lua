@@ -71,7 +71,7 @@ local function refreshDerivedAssignmentState()
 end
 
 VERSION = "1.0.0.1"
-PLATFORM_BUILD_LABEL = "macOS Apple Silicon Edition"
+PLATFORM_BUILD_LABEL = "Windows Edition"
 SETTINGS = {
     DISPLAY = {
         BORDERLESS = false,
@@ -103,7 +103,7 @@ SETTINGS = {
     },
     -- Build-time feature switches. Do not expose these in runtime menus.
     FEATURES = {
-        SCENARIO_MODE = true
+        SCENARIO_MODE = false
     },
     INPUT = {
         GAMEPAD_AXIS_THRESHOLD = 0.45,

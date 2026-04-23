@@ -10,7 +10,6 @@ local states = {
 }
 if SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_MODE then
     states.scenarioSelect = require("scenarioSelect")
-    states.scenarioGameplay = require("scenarioGameplay")
     states.scenarioEditor = require("scenarioEditor")
 end
 local inputBindings = require("input_bindings")

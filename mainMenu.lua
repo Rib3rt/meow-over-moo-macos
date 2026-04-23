@@ -7,10 +7,18 @@ local stateMachineRef = nil
 local ConfirmDialog = require("confirmDialog")
 local os = require("os")
 local uiTheme = require("uiTheme")
+local menuBackground = require("menu_background")
 local soundCache = require("soundCache")
 local steamRuntime = require("steam_runtime")
 local resumeStore = require("resume_store")
 local Controller = require("controller")
+local fontCache = require("fontCache")
+
+local MONOGRAM_FONT_PATH = "assets/fonts/monogram-extended.ttf"
+
+local function getMonogramFont(size)
+    return fontCache.get(MONOGRAM_FONT_PATH, size)
+end
 
 --------------------------------------------------
 -- Variables (Local to this module)
@@ -23,169 +31,19 @@ local pendingRemotePlayActivePrompt = false
 local selectEnabledButton
 local ensureValidButtonSelection
 local triggerSelectedButton
+local menuLayout = nil
+local logoImage = nil
+local logoLoadAttempted = false
+local logoAnimation = {
+    time = 0,
+    introElapsed = 0,
+    introDuration = 0.55
+}
 
 -- Match the UI colors with the faction select and gameplay screens
 local UI_COLORS = uiTheme.COLORS
-local backgroundShader = nil
 local DISABLED_BUTTON_COLOR = uiTheme.BUTTON_VARIANTS.disabled.base
 local SCENARIO_FEATURE_ENABLED = SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_MODE == true
-
-local function ensureBackgroundShader()
-    if backgroundShader then
-        return
-    end
-
-    local success, shader = pcall(love.graphics.newShader, [[
-        float hash(vec2 p) {
-            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-        }
-
-        float noise(vec2 p) {
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            f = f * f * (2.0 - f);
-
-            float a = hash(i);
-            float b = hash(i + vec2(1.0, 0.0));
-            float c = hash(i + vec2(0.0, 1.0));
-            float d = hash(i + vec2(1.0, 1.0));
-
-            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-        }
-
-        uniform float time;
-        uniform vec2 resolution;
-        uniform vec2 gridCenter;
-        uniform float gridSize;
-        uniform float displayScale;
-        uniform vec2 displayOffset;
-        uniform float factionCycle;
-        uniform vec3 factionColorA;
-        uniform vec3 factionColorB;
-
-        vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords) {
-            vec2 uv = screen_coords / resolution;
-
-            float slowTime = time * 0.12;
-            float mediumTime = time * 0.25;
-            float fastTime = time * 0.4;
-
-            vec2 drift1 = vec2(sin(slowTime * 0.7) * 0.4, cos(slowTime * 0.5) * 0.3);
-            vec2 drift2 = vec2(cos(mediumTime * 0.3) * 0.2, sin(mediumTime * 0.4) * 0.25);
-            vec2 p = uv * 18.0 + drift1 + drift2;
-
-            float n1 = noise(p + vec2(slowTime * 0.2, slowTime * 0.15));
-            float n2 = noise(p * 2.5 + vec2(1.7 + mediumTime * 0.1, 2.3 + mediumTime * 0.08));
-            float n3 = noise(p * 5.2 + vec2(5.1 + fastTime * 0.05, 1.9 + fastTime * 0.06));
-            float n4 = noise(p * 10.8 + vec2(3.2 + fastTime * 0.03, 4.8 + fastTime * 0.04));
-
-            float weight1 = 0.35 + sin(slowTime * 0.6) * 0.05;
-            float weight2 = 0.25 + cos(mediumTime * 0.4) * 0.03;
-            float combined = n1 * weight1 + n2 * weight2 + n3 * 0.25 + n4 * 0.15;
-
-            float grainPulse = 1.0 + sin(mediumTime * 1.2) * 0.3;
-            float grain = sin(p.x * 1.5 + combined * 5.0 + slowTime * 0.5) * 0.15 * grainPulse;
-            combined += grain;
-
-            float swirl1 = sin(p.x * 0.4 + p.y * 0.6 + combined * 3.0 + slowTime * 1.2) * 0.12;
-            float swirl2 = sin(p.x * 0.7 - p.y * 0.3 + combined * 2.5 + mediumTime * 0.8) * 0.1;
-            float swirl3 = cos(p.x * 0.3 + p.y * 0.8 + combined * 4.0 + fastTime * 0.6) * 0.08;
-            combined += swirl1 + swirl2 + swirl3;
-
-            vec2 centeredUv = (uv - 0.5) * 2.0;
-            float rotationAngle = slowTime * 0.3;
-            mat2 rot = mat2(cos(rotationAngle), -sin(rotationAngle), sin(rotationAngle), cos(rotationAngle));
-            vec2 rotatedUv = rot * centeredUv;
-
-            vec2 blobOffset1 = vec2(sin(slowTime * 0.6) * 0.35, cos(slowTime * 0.5) * 0.28);
-            vec2 blobOffset2 = vec2(cos(mediumTime * 0.7) * 0.25, sin(mediumTime * 0.6) * 0.32);
-            vec2 blobOffset3 = vec2(sin((slowTime + mediumTime) * 0.4) * 0.3, sin((slowTime - mediumTime) * 0.5) * 0.3);
-
-            float blob1 = smoothstep(0.58, 0.18, length(rotatedUv - blobOffset1));
-            float blob2 = smoothstep(0.62, 0.16, length(rotatedUv - blobOffset2));
-            float blob3 = smoothstep(0.6, 0.2, length(rotatedUv - blobOffset3));
-
-            float lavaMask = clamp((blob1 + blob2 + blob3) / 2.4, 0.0, 1.0);
-            float lavaPulse = 0.55 + 0.45 * sin(slowTime * 1.7 + uv.y * 4.5 + blob1 * 2.0);
-            lavaMask = pow(lavaMask * lavaPulse, 1.05);
-
-            float factionWave = sin(factionCycle);
-            float factionBlend = smoothstep(-0.25, 0.25, factionWave);
-            vec3 cycleBaseColor = mix(factionColorA, factionColorB, factionBlend);
-            vec3 lavaDeep = mix(vec3(0.16, 0.11, 0.07), cycleBaseColor, 0.55);
-            vec3 lavaBright = mix(cycleBaseColor, vec3(1.0, 0.95, 0.86), 0.35);
-            vec3 lavaColor = mix(lavaDeep, lavaBright, lavaMask);
-
-            combined = clamp(combined, 0.0, 1.0);
-            combined = pow(combined, 0.6);
-
-            vec3 darkBrown = vec3(0.58, 0.48, 0.32);
-            vec3 mediumBrown = vec3(0.72, 0.62, 0.45);
-            vec3 lightBrown = vec3(0.82, 0.74, 0.58);
-            vec3 tan = vec3(0.88, 0.82, 0.68);
-            vec3 lightTan = vec3(0.94, 0.90, 0.80);
-
-            vec3 finalColor;
-            if (combined < 0.2) {
-                finalColor = mix(darkBrown, mediumBrown, combined / 0.2);
-            } else if (combined < 0.4) {
-                finalColor = mix(mediumBrown, lightBrown, (combined - 0.2) / 0.2);
-            } else if (combined < 0.7) {
-                finalColor = mix(lightBrown, tan, (combined - 0.4) / 0.3);
-            } else {
-                finalColor = mix(tan, lightTan, (combined - 0.7) / 0.3);
-            }
-
-            float surface = noise(p * 24.0) * 0.04;
-            finalColor += surface;
-
-            float warmth = noise(p * 6.0 + vec2(slowTime * 0.1, mediumTime * 0.08)) * 0.025;
-            float breathing1 = sin(slowTime * 1.4) * 0.03;
-            float breathing2 = cos(mediumTime * 0.8) * 0.02;
-            float pulse = sin(fastTime * 0.5) * 0.015;
-
-            finalColor.r += warmth + (breathing1 + pulse) * 1.3;
-            finalColor.g += warmth * 0.9 + (breathing1 + breathing2) * 1.0;
-            finalColor.b += (breathing2 + pulse) * 0.2;
-
-            finalColor = mix(finalColor, lavaColor, lavaMask * 0.55);
-            finalColor += lavaColor * lavaMask * 0.08;
-
-            vec2 windowCoords = screen_coords;
-            vec2 transformedCoords = (windowCoords - displayOffset) / displayScale;
-            float distFromGridCenter = distance(transformedCoords, gridCenter);
-            float vignetteRadius = gridSize * 0.9;
-            float vignette = 1.0 - smoothstep(vignetteRadius * 0.55, vignetteRadius * 1.05, distFromGridCenter);
-            vignette = pow(vignette, 0.7);
-
-            finalColor *= mix(0.65, 1.0, vignette);
-            finalColor = clamp(finalColor, 0.0, 1.0);
-
-            return vec4(finalColor, 1.0) * color;
-        }
-    ]])
-
-    if success and shader then
-        backgroundShader = shader
-
-        local gridCenterX = GAME.CONSTANTS.GRID_ORIGIN_X + GAME.CONSTANTS.GRID_WIDTH / 2
-        local gridCenterY = GAME.CONSTANTS.GRID_ORIGIN_Y + GAME.CONSTANTS.GRID_HEIGHT / 2
-        backgroundShader:send("gridCenter", {gridCenterX, gridCenterY})
-        backgroundShader:send("gridSize", GAME.CONSTANTS.GRID_WIDTH)
-        backgroundShader:send("displayScale", SETTINGS.DISPLAY.SCALE)
-        backgroundShader:send("displayOffset", {SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY})
-
-        local blue = UI_COLORS.blueTeam
-        local red = UI_COLORS.redTeam
-        backgroundShader:send("factionColorA", {blue[1], blue[2], blue[3]})
-        backgroundShader:send("factionColorB", {red[1], red[2], red[3]})
-
-        backgroundShader:send("resolution", {SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT})
-
-    else
-        backgroundShader = nil
-    end
-end
 
 --------------------------------------------------
 -- Functions (Local to this module)
@@ -203,10 +61,6 @@ end
 local function isMouseOverButton(button, x, y)
     return (x >= button.x and x <= button.x + button.width) and
            (y >= button.y and y <= button.y + button.height)
-end
-
-local function drawTechPanel(x, y, width, height)
-    uiTheme.drawTechPanel(x, y, width, height)
 end
 
 -- Draw a tech-styled button
@@ -238,9 +92,99 @@ local function drawButton(button)
     uiTheme.drawButton(button)
 end
 
--- Draw a tech-styled title with glow
 local function drawTitle(text, x, y, width)
     uiTheme.drawTitle(text, x, y, width)
+end
+
+local function clamp(value, minValue, maxValue)
+    if value < minValue then
+        return minValue
+    end
+    if value > maxValue then
+        return maxValue
+    end
+    return value
+end
+
+local function loadLogoImageOnce()
+    if logoLoadAttempted then
+        return logoImage
+    end
+
+    logoLoadAttempted = true
+    local ok, image = pcall(love.graphics.newImage, "assets/sprites/Logo.png")
+    if ok and image then
+        image:setFilter("linear", "linear")
+        logoImage = image
+    else
+        logoImage = nil
+    end
+    return logoImage
+end
+
+local function computeMainMenuLayout(buttonCount)
+    local displayW = SETTINGS.DISPLAY.WIDTH
+    local displayH = SETTINGS.DISPLAY.HEIGHT
+
+    local contentTop = math.floor(displayH * 0.04)
+    local footerY = displayH - 50
+    local contentBottom = footerY - 24
+    local contentHeight = contentBottom - contentTop
+
+    local buttonHeight = math.floor(clamp(displayH * 0.07, 54, 60))
+    local buttonGap = math.floor(clamp(displayH * 0.014, 10, 14))
+    local buttonWidth = math.floor(clamp(displayW * 0.245, 240, 320))
+    local buttonFontSize = math.floor(clamp(displayH * 0.033, 22, 28))
+    local footerFontSize = math.floor(clamp(displayH * 0.022, 16, 20))
+    local sectionGap = math.max(20, math.floor(displayH * 0.025))
+    local buttonBlockHeight = (buttonCount * buttonHeight) + (math.max(0, buttonCount - 1) * buttonGap)
+
+    local logoAspect = 16 / 9
+    local image = loadLogoImageOnce()
+    if image then
+        logoAspect = image:getWidth() / math.max(1, image:getHeight())
+    end
+
+    local minLogoHeight = math.floor(displayH * 0.24)
+    local maxLogoHeight = math.floor(displayH * 0.50)
+    local logoHeight = clamp(contentHeight - buttonBlockHeight - sectionGap, minLogoHeight, maxLogoHeight)
+    local minLogoWidth = math.floor(displayW * 0.36)
+    local maxLogoWidth = math.floor(displayW * 0.78)
+    local logoWidth = clamp(math.floor(logoHeight * logoAspect + 0.5), minLogoWidth, maxLogoWidth)
+    logoHeight = math.floor(logoWidth / logoAspect + 0.5)
+
+    local usedHeight = logoHeight + sectionGap + buttonBlockHeight
+    if usedHeight > contentHeight then
+        local fallbackLogoHeight = math.floor(contentHeight - buttonBlockHeight - sectionGap)
+        logoHeight = clamp(fallbackLogoHeight, math.floor(displayH * 0.17), maxLogoHeight)
+        logoWidth = clamp(math.floor(logoHeight * logoAspect + 0.5), minLogoWidth, maxLogoWidth)
+        logoHeight = math.floor(logoWidth / logoAspect + 0.5)
+        usedHeight = logoHeight + sectionGap + buttonBlockHeight
+    end
+
+    local verticalOffset = math.floor((contentHeight - usedHeight) / 2)
+    if verticalOffset < 0 then
+        verticalOffset = 0
+    end
+
+    local logoX = math.floor((displayW - logoWidth) / 2)
+    local logoY = contentTop + verticalOffset
+    local buttonX = math.floor((displayW - buttonWidth) / 2)
+    local buttonStartY = logoY + logoHeight + sectionGap
+
+    return {
+        logoX = logoX,
+        logoY = logoY,
+        logoWidth = logoWidth,
+        logoHeight = logoHeight,
+        buttonX = buttonX,
+        buttonY = buttonStartY,
+        buttonWidth = buttonWidth,
+        buttonHeight = buttonHeight,
+        buttonGap = buttonGap,
+        buttonFontSize = buttonFontSize,
+        footerFontSize = footerFontSize
+    }
 end
 
 local function isButtonEnabled(button)
@@ -584,39 +528,43 @@ function mainMenu.enter(stateMachine)
     stateMachineRef = stateMachine
     pendingRemotePlayActivePrompt = false
     local pendingMainMenuNotice = nil
-    
-    -- Initialize menu buttons with proper styling
-    local buttonX = SETTINGS.DISPLAY.WIDTH / 2 - 100
-    local nextButtonY = 180
-    local function allocButtonY()
-        local current = nextButtonY
-        nextButtonY = nextButtonY + 70
-        return current
+    logoAnimation.time = 0
+    logoAnimation.introElapsed = 0
+
+    local buttonBlueprints = {}
+    if SCENARIO_FEATURE_ENABLED then
+        buttonBlueprints[#buttonBlueprints + 1] = { id = "playScenario", text = "Play Scenario", enabled = true }
     end
-    local function createButton(buttonId, textValue, enabledValue)
+    buttonBlueprints[#buttonBlueprints + 1] = { id = "playSingle", text = "Single Player", enabled = true }
+    buttonBlueprints[#buttonBlueprints + 1] = { id = "playLocal", text = "Local Multiplayer", enabled = true }
+    buttonBlueprints[#buttonBlueprints + 1] = { id = "playOnline", text = "Online Multiplayer", enabled = false }
+    buttonBlueprints[#buttonBlueprints + 1] = { id = "playLeaderboard", text = "Leaderboard", enabled = false }
+    buttonBlueprints[#buttonBlueprints + 1] = { id = "quit", text = "Quit", enabled = true }
+
+    menuLayout = computeMainMenuLayout(#buttonBlueprints)
+    loadLogoImageOnce()
+
+    local function createButton(definition, index)
+        local y = menuLayout.buttonY + ((index - 1) * (menuLayout.buttonHeight + menuLayout.buttonGap))
         return {
-            id = buttonId,
-            x = buttonX,
-            y = allocButtonY(),
-            width = 200,
-            height = 50,
-            text = textValue,
-            enabled = enabledValue ~= false,
+            id = definition.id,
+            x = menuLayout.buttonX,
+            y = y,
+            width = menuLayout.buttonWidth,
+            height = menuLayout.buttonHeight,
+            text = definition.text,
+            enabled = definition.enabled ~= false,
             currentColor = UI_COLORS.button,
             hoverColor = UI_COLORS.buttonHover,
-            pressedColor = UI_COLORS.buttonPressed
+            pressedColor = UI_COLORS.buttonPressed,
+            centerText = true
         }
     end
 
     uiButtons = {}
-    if SCENARIO_FEATURE_ENABLED then
-        uiButtons.playScenario = createButton("playScenario", "PLAY SCENARIO", true)
+    for index, definition in ipairs(buttonBlueprints) do
+        uiButtons[definition.id] = createButton(definition, index)
     end
-    uiButtons.playSingle = createButton("playSingle", "Single Player", true)
-    uiButtons.playLocal = createButton("playLocal", "Local Multiplayer", true)
-    uiButtons.playOnline = createButton("playOnline", "Online Multiplayer", false)
-    uiButtons.playLeaderboard = createButton("playLeaderboard", "Leaderboard", false)
-    uiButtons.quit = createButton("quit", "Quit", true)
 
     initializeRandomSeed()
 
@@ -679,13 +627,17 @@ function mainMenu.enter(stateMachine)
         GAME.CURRENT.MAIN_MENU_ONE_SHOT_NOTICE = pendingMainMenuNotice
     end
 
-    ensureBackgroundShader()
 end
 
 -------------------------------------------
 -- LOVE UPDATE FUNCTION
 -------------------------------------------
 function mainMenu.update(dt)
+    logoAnimation.time = logoAnimation.time + dt
+    if logoAnimation.introElapsed < logoAnimation.introDuration then
+        logoAnimation.introElapsed = math.min(logoAnimation.introDuration, logoAnimation.introElapsed + dt)
+    end
+
     local wasOnlineEnabled = nil
     if uiButtons and uiButtons.playOnline then
         wasOnlineEnabled = uiButtons.playOnline.enabled
@@ -738,51 +690,40 @@ function mainMenu.draw()
     love.graphics.push()
     love.graphics.translate(SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY)
     love.graphics.scale(SETTINGS.DISPLAY.SCALE)
+    local previousFont = love.graphics.getFont()
 
-    ensureBackgroundShader()
+    menuBackground.draw()
 
-    if backgroundShader then
-        love.graphics.setShader(backgroundShader)
-        local timeNow = love.timer.getTime()
-        backgroundShader:send("time", timeNow)
+    local currentLayout = menuLayout or computeMainMenuLayout(#buttonOrder)
+    local logo = loadLogoImageOnce()
+    if logo then
+        local introProgress = clamp(logoAnimation.introElapsed / math.max(0.001, logoAnimation.introDuration), 0, 1)
+        local introEase = 1 - ((1 - introProgress) * (1 - introProgress) * (1 - introProgress))
+        local introOffsetY = (1 - introEase) * 22
 
-        local windowW, windowH = love.graphics.getDimensions()
-        backgroundShader:send("resolution", {SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT})
+        local floatOffsetY = math.sin(logoAnimation.time * 1.35) * 4.0
+        local breatheScale = 1 + (math.sin(logoAnimation.time * 0.9) * 0.018)
 
-        local gridCenterX = GAME.CONSTANTS.GRID_ORIGIN_X + GAME.CONSTANTS.GRID_WIDTH / 2
-        local gridCenterY = GAME.CONSTANTS.GRID_ORIGIN_Y + GAME.CONSTANTS.GRID_HEIGHT / 2
-        backgroundShader:send("gridCenter", {gridCenterX, gridCenterY})
-        backgroundShader:send("gridSize", GAME.CONSTANTS.GRID_WIDTH)
-        backgroundShader:send("displayScale", SETTINGS.DISPLAY.SCALE)
-        backgroundShader:send("displayOffset", {SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY})
+        local targetLogoW = currentLayout.logoWidth * breatheScale
+        local targetLogoH = currentLayout.logoHeight * breatheScale
+        local logoX = currentLayout.logoX - ((targetLogoW - currentLayout.logoWidth) * 0.5)
+        local logoY = currentLayout.logoY + introOffsetY + floatOffsetY - ((targetLogoH - currentLayout.logoHeight) * 0.5)
 
-        backgroundShader:send("resolution", {windowW, windowH})
+        local logoScaleX = targetLogoW / logo:getWidth()
+        local logoScaleY = targetLogoH / logo:getHeight()
+        local shadowAlpha = (0.24 + (math.sin(logoAnimation.time * 1.1) * 0.06)) * introEase
+        local logoAlpha = introEase
 
-        backgroundShader:send("factionCycle", timeNow * 0.9)
-        local blue = UI_COLORS.blueTeam
-        local red = UI_COLORS.redTeam
-        backgroundShader:send("factionColorA", {blue[1] or 0.2, blue[2] or 0.4, blue[3] or 0.8})
-        backgroundShader:send("factionColorB", {red[1] or 0.8, red[2] or 0.2, red[3] or 0.2})
-
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
-        love.graphics.setShader()
+        love.graphics.setColor(0, 0, 0, shadowAlpha)
+        love.graphics.draw(logo, logoX + 3, logoY + 5, 0, logoScaleX, logoScaleY)
+        love.graphics.setColor(1, 1, 1, logoAlpha)
+        love.graphics.draw(logo, logoX, logoY, 0, logoScaleX, logoScaleY)
     else
-        love.graphics.setColor(UI_COLORS.background)
-        love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
+        drawTitle("MEOW OVER MOO!", 0, 56, SETTINGS.DISPLAY.WIDTH)
     end
 
-    love.graphics.setColor(UI_COLORS.border)
-    love.graphics.setLineWidth(2)
-    love.graphics.line(80, 100, 80, SETTINGS.DISPLAY.HEIGHT - 100)
-    love.graphics.line(SETTINGS.DISPLAY.WIDTH - 80, 100, SETTINGS.DISPLAY.WIDTH - 80, SETTINGS.DISPLAY.HEIGHT - 100)
-    love.graphics.line(120, SETTINGS.DISPLAY.HEIGHT - 80, SETTINGS.DISPLAY.WIDTH - 120, SETTINGS.DISPLAY.HEIGHT - 80)
-    love.graphics.setLineWidth(1)
-
-    drawTechPanel(SETTINGS.DISPLAY.WIDTH / 2 - 150, 40, 300, 60)
-    drawTitle("MEOW OVER MOO!", 0, 60, SETTINGS.DISPLAY.WIDTH)
-
     if uiButtons then
+        love.graphics.setFont(getMonogramFont(currentLayout.buttonFontSize))
         for _, button in ipairs(buttonOrder) do
             drawButton(button)
         end
@@ -791,11 +732,23 @@ function mainMenu.draw()
         if PLATFORM_BUILD_LABEL and PLATFORM_BUILD_LABEL ~= "" then
             footerText = footerText .. " - " .. tostring(PLATFORM_BUILD_LABEL)
         end
-        love.graphics.setColor(UI_COLORS.background)
-        love.graphics.printf(footerText, 0, SETTINGS.DISPLAY.HEIGHT - 50, SETTINGS.DISPLAY.WIDTH, "center")
+        local footerFont = getMonogramFont(currentLayout.footerFontSize)
+        local footerY = SETTINGS.DISPLAY.HEIGHT - footerFont:getHeight() - 14
+        local footerMarginRight = 18
+        local footerX = SETTINGS.DISPLAY.WIDTH - footerFont:getWidth(footerText) - footerMarginRight
+        if footerX < 12 then
+            footerX = 12
+        end
+        love.graphics.setFont(footerFont)
+        love.graphics.setColor(0, 0, 0, 0.56)
+        love.graphics.print(footerText, footerX + 1, footerY + 1)
+        love.graphics.setColor(0.97, 0.95, 0.90, 0.9)
+        love.graphics.print(footerText, footerX, footerY)
     end
 
     love.graphics.setLineWidth(1)
+
+    love.graphics.setFont(previousFont)
 
     if ConfirmDialog and ConfirmDialog.draw then
         ConfirmDialog.draw()

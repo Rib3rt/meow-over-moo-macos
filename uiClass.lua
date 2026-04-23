@@ -4201,6 +4201,14 @@ function uiClass:drawPhaseButtonStandard(x, y, width, height, phaseInfo, colors)
         return
     end
 
+    -- In single player, keep manual confirmation only for Commandant placement.
+    -- Every other phase transition is auto-accepted by gameplay flow.
+    if self:shouldHideAutomaticSinglePlayerPhaseButton(phaseInfo, buttonInfo) then
+        self.pulsing.active = false
+        self.phaseButton = nil
+        return
+    end
+
     -- In online multiplayer, reuse the phase-button space for reaction buttons on non-local turns.
     if self:isOnlineNonLocalTurn(phaseInfo) then
         self.phaseButton = nil
@@ -4474,6 +4482,19 @@ function uiClass:shouldHideAutomaticOnlinePhaseButton(phaseInfo, buttonInfo)
     end
 
     return false
+end
+
+function uiClass:shouldHideAutomaticSinglePlayerPhaseButton(phaseInfo, buttonInfo)
+    if GAME.CURRENT.MODE ~= GAME.MODE.SINGLE_PLAYER then
+        return false
+    end
+
+    local actionType = tostring((buttonInfo and buttonInfo.actionType) or "")
+    if actionType == "confirmCommandHub" then
+        return false
+    end
+
+    return true
 end
 
 function uiClass:calculateButtonAnimationValues(buttonX, buttonY)

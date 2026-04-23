@@ -962,49 +962,12 @@ local function activateScenario(index)
     if not row then
         return
     end
-
-    if GAME and type(GAME.resetToDefaultControllers) == "function" then
-        GAME.resetToDefaultControllers()
-    end
-
-    local snapshot, snapshotErr = buildScenarioSnapshot(row.id)
-    if not snapshot then
-        setStatusBar("Scenario data invalid: " .. tostring(snapshotErr or "unknown_error"), "error")
-        return
-    end
-
-    local progressEntry = getScenarioProgressEntry(row.id)
-    progressEntry.attempts = math.max(0, tonumber(progressEntry.attempts) or 0) + 1
-    row.attempts = progressEntry.attempts
-    saveProgressData(progressData)
-
-    setStatusBar(string.format("Starting %s...", row.name), "ok")
-
-    GAME.CURRENT.SCENARIO = {
-        id = row.id,
-        name = row.name,
-        status = row.status,
-        solved = row.solved == true,
-        attempts = row.attempts,
-        turnsTarget = row.turnsTarget,
-        objectiveMessage = row.objectiveMessage,
-        objectiveText = row.objectiveText,
-        objectiveType = row.objectiveType,
-        sideToMove = row.sideToMove,
-        sourcePath = row.sourcePath,
-        snapshot = snapshot
-    }
-    GAME.CURRENT.SCENARIO_RETURN_STATE = "scenarioSelect"
-    GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
-    GAME.CURRENT.MODE = GAME.MODE.SCENARIO
-    GAME.CURRENT.LOCAL_MATCH_VARIANT = "couch"
-    GAME.CURRENT.PENDING_RESUME_SNAPSHOT = nil
-    GAME.CURRENT.RESUME_RESTART_NOTICE = nil
-    clearOnlineRuntime()
-
-    if stateMachineRef then
-        stateMachineRef.changeState("scenarioGameplay")
-    end
+    setSelectedRowIndex(index)
+    listFocus = true
+    setStatusBar(
+        string.format("%s selected. Scenario runtime is disabled (UI-only mode). Open EDITOR to continue.", row.name),
+        "warn"
+    )
 end
 
 local function onBack()
@@ -1082,22 +1045,15 @@ function scenarioSelect.enter(stateMachine)
     lastHoveredTarget = nil
 
     progressData = loadProgressData()
-    local pendingResult = consumePendingScenarioResult()
-    local pendingSolved = applyPendingScenarioResult(pendingResult)
+    consumePendingScenarioResult()
     buildScenarioRows()
     clampSelection()
 
-    if type(pendingSolved) == "boolean" then
-        if pendingSolved then
-            setStatusBar("Scenario solved. Select your next challenge.", "ok")
-        else
-            setStatusBar("Scenario failed. Try again.", "warn")
-        end
-    elseif #scenarioRows == 0 then
+    if #scenarioRows == 0 then
         listFocus = false
         setStatusBar("No scenarios available.", "warn")
     else
-        setStatusBar("Select a scenario from the list.", "info")
+        setStatusBar("UI-only mode: select a scenario or open EDITOR.", "info")
     end
 
     updateButtonStates()

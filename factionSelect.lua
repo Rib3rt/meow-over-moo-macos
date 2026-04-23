@@ -4,6 +4,7 @@ local stateMachineRef = {}
 local ConfirmDialog = require("confirmDialog") -- Add the confirmation dialog module
 local randomGen = require('randomGenerator')
 local uiTheme = require("uiTheme")
+local menuBackground = require("menu_background")
 local soundCache = require("soundCache")
 local steamRuntime = require("steam_runtime")
 local onlineRatingStore = require("online_rating_store")
@@ -26,9 +27,10 @@ local cardAssets = {
     bluFactionImage = nil,
     redFactionImage = nil
 }
+local logoImage = nil
+local logoLoadAttempted = false
+local screenLayout = nil
 
--- Background shader for visual consistency with gameplay
-local backgroundShader = nil
 local UI_COLORS = uiTheme.COLORS
 local lightenColor = uiTheme.lighten
 local darkenColor = uiTheme.darken
@@ -79,6 +81,93 @@ local function nowSeconds()
         return love.timer.getTime()
     end
     return (os and os.time and os.time()) or 0
+end
+
+local function clamp(value, minValue, maxValue)
+    if value < minValue then
+        return minValue
+    end
+    if value > maxValue then
+        return maxValue
+    end
+    return value
+end
+
+local function loadLogoImageOnce()
+    if logoLoadAttempted then
+        return logoImage
+    end
+
+    logoLoadAttempted = true
+    local ok, image = pcall(love.graphics.newImage, "assets/sprites/Logo.png")
+    if ok and image then
+        image:setFilter("linear", "linear")
+        logoImage = image
+    else
+        logoImage = nil
+    end
+    return logoImage
+end
+
+local function computeFactionScreenLayout()
+    local displayW = SETTINGS.DISPLAY.WIDTH
+    local displayH = SETTINGS.DISPLAY.HEIGHT
+
+    local logoAspect = 16 / 9
+    local logo = loadLogoImageOnce()
+    if logo then
+        logoAspect = logo:getWidth() / math.max(1, logo:getHeight())
+    end
+
+    local logoH = math.floor(clamp(displayH * 0.14, 84, 120))
+    local logoW = math.floor(clamp(logoH * logoAspect, displayW * 0.15, displayW * 0.28))
+    logoH = math.floor(logoW / logoAspect + 0.5)
+    local logoY = math.floor(displayH * 0.052)
+    local logoX = math.floor((displayW - logoW) / 2)
+
+    local hintHeaderReserve = math.floor(clamp(displayH * 0.05, 32, 46))
+    local cardsTop = logoY + logoH + math.floor(displayH * 0.018) + hintHeaderReserve
+    local cardWidth = math.floor(clamp(displayW * 0.17, 180, 230))
+    local cardHeight = math.floor(clamp(displayH * 0.40, 280, 340))
+    local cardGap = math.floor(clamp(displayW * 0.09, 90, 150))
+    local cardsStartX = math.floor((displayW - ((cardWidth * 2) + cardGap)) / 2)
+
+    local selectorHeight = math.floor(clamp(displayH * 0.055, 40, 48))
+    local selectorsY = cardsTop + cardHeight + math.floor(displayH * 0.02)
+
+    local buttonHeight = math.floor(clamp(displayH * 0.07, 52, 60))
+    local buttonWidth = math.floor(clamp(displayW * 0.16, 150, 220))
+    local buttonGap = math.floor(clamp(displayW * 0.014, 12, 18))
+    local buttonY = selectorsY + selectorHeight + math.floor(displayH * 0.055)
+
+    local buttonFontSize = math.floor(clamp(displayH * 0.033, 22, 28))
+    local footerFontSize = math.floor(clamp(displayH * 0.021, 16, 20))
+    local maxButtonY = displayH - buttonHeight - (footerFontSize + 30)
+    if buttonY > maxButtonY then
+        buttonY = maxButtonY
+    end
+
+    return {
+        logoX = logoX,
+        logoY = logoY,
+        logoW = logoW,
+        logoH = logoH,
+        cardsX = cardsStartX,
+        cardsY = cardsTop,
+        cardW = cardWidth,
+        cardH = cardHeight,
+        cardGap = cardGap,
+        hintHeaderReserve = hintHeaderReserve,
+        selectorsY = selectorsY,
+        selectorW = cardWidth,
+        selectorH = selectorHeight,
+        buttonW = buttonWidth,
+        buttonH = buttonHeight,
+        buttonGap = buttonGap,
+        buttonY = buttonY,
+        buttonFontSize = buttonFontSize,
+        footerFontSize = footerFontSize
+    }
 end
 
 local function shouldLogFactionDebug()
@@ -635,8 +724,8 @@ local PROFILE_VISIBLE_BUTTON_KEYS = {
 }
 
 local BUTTON_LAYOUT = {
-    width = 120,
-    height = 50,
+    width = 180,
+    height = 56,
     gap = 14,
     y = 550
 }
@@ -763,6 +852,8 @@ local function applyButtonVisualState(buttonDef, buttonKey, preserveCurrentColor
     buttonDef.borderColor = visual.border or BUTTON_STYLE_COLORS.normalBorder
     buttonDef.textColor = visual.textColor or BUTTON_STYLE_COLORS.normalText
     buttonDef.disabledVisual = visual.disabled == true
+    buttonDef.centerText = true
+    buttonDef.textOffsetY = nil
 
     if visual.text ~= nil then
         buttonDef.text = visual.text
@@ -782,31 +873,78 @@ end
 
 local lastFactionUiButtonSignature = nil
 
+local function refreshScreenLayout()
+    screenLayout = computeFactionScreenLayout()
+    BUTTON_LAYOUT.width = screenLayout.buttonW
+    BUTTON_LAYOUT.height = screenLayout.buttonH
+    BUTTON_LAYOUT.gap = screenLayout.buttonGap
+    BUTTON_LAYOUT.y = screenLayout.buttonY
+
+    if not uiElements then
+        return
+    end
+
+    if type(uiElements.factions) == "table" and #uiElements.factions >= 2 then
+        local leftCard = uiElements.factions[1]
+        local rightCard = uiElements.factions[2]
+        if leftCard then
+            leftCard.x = screenLayout.cardsX
+            leftCard.y = screenLayout.cardsY
+            leftCard.width = screenLayout.cardW
+            leftCard.height = screenLayout.cardH
+        end
+        if rightCard then
+            rightCard.x = screenLayout.cardsX + screenLayout.cardW + screenLayout.cardGap
+            rightCard.y = screenLayout.cardsY
+            rightCard.width = screenLayout.cardW
+            rightCard.height = screenLayout.cardH
+        end
+    end
+
+    if type(uiElements.selectors) == "table" and #uiElements.selectors >= 2 then
+        local leftSelector = uiElements.selectors[1]
+        local rightSelector = uiElements.selectors[2]
+        if leftSelector then
+            leftSelector.x = screenLayout.cardsX
+            leftSelector.y = screenLayout.selectorsY
+            leftSelector.width = screenLayout.selectorW
+            leftSelector.height = screenLayout.selectorH
+        end
+        if rightSelector then
+            rightSelector.x = screenLayout.cardsX + screenLayout.selectorW + screenLayout.cardGap
+            rightSelector.y = screenLayout.selectorsY
+            rightSelector.width = screenLayout.selectorW
+            rightSelector.height = screenLayout.selectorH
+        end
+    end
+end
+
 local function makeDefaultButtonDef(buttonKey)
+    local centerX = SETTINGS.DISPLAY.WIDTH * 0.5
     local defaultsByKey = {
         back = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 315,
+            x = centerX - 280,
             y = BUTTON_LAYOUT.y,
             width = BUTTON_LAYOUT.width,
             height = BUTTON_LAYOUT.height,
             text = "Back"
         },
         random = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 - 145,
+            x = centerX - 90,
             y = BUTTON_LAYOUT.y,
             width = BUTTON_LAYOUT.width,
             height = BUTTON_LAYOUT.height,
             text = "Random"
         },
         ready = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 + 25,
+            x = centerX + 100,
             y = BUTTON_LAYOUT.y,
             width = BUTTON_LAYOUT.width,
             height = BUTTON_LAYOUT.height,
             text = "Ready"
         },
         start = {
-            x = SETTINGS.DISPLAY.WIDTH / 2 + 195,
+            x = centerX + 290,
             y = BUTTON_LAYOUT.y,
             width = BUTTON_LAYOUT.width,
             height = BUTTON_LAYOUT.height,
@@ -823,6 +961,7 @@ local function makeDefaultButtonDef(buttonKey)
         currentColor = UI_COLORS.button,
         hoverColor = UI_COLORS.buttonHover,
         pressedColor = UI_COLORS.buttonPressed,
+        centerText = true,
         pressed = false,
         pressTimer = 0
     }
@@ -981,6 +1120,7 @@ local function getVisibleButtons()
 end
 
 local function refreshButtonLayout()
+    refreshScreenLayout()
     logFactionUiProfileButtons()
     local buttons = getVisibleButtons()
     if #buttons == 0 then
@@ -1094,7 +1234,7 @@ local function triggerFactionButtonAction(buttonKey)
     end
 end
 
--- Initialize card assets and shader
+-- Initialize card assets
 local function initializeAssets()
     -- Load card template
     local success, image = pcall(love.graphics.newImage, "assets/sprites/CardTemplateFront.png")
@@ -1126,158 +1266,10 @@ local function initializeAssets()
     else
         return false
     end
-    -- Create the same background shader used during gameplay for visual consistency
-    local success, shader = pcall(love.graphics.newShader, [[
-        float hash(vec2 p) {
-            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-        }
 
-        float noise(vec2 p) {
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            f = f * f * (2.0 - f);
-
-            float a = hash(i);
-            float b = hash(i + vec2(1.0, 0.0));
-            float c = hash(i + vec2(0.0, 1.0));
-            float d = hash(i + vec2(1.0, 1.0));
-
-            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-        }
-
-        uniform float time;
-        uniform vec2 resolution;
-        uniform vec2 gridCenter;
-        uniform float gridSize;
-        uniform float displayScale;
-        uniform vec2 displayOffset;
-        uniform float factionCycle;
-        uniform vec3 factionColorA;
-        uniform vec3 factionColorB;
-
-        vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords) {
-            vec2 uv = screen_coords / resolution;
-
-            float slowTime = time * 0.12;
-            float mediumTime = time * 0.25;
-            float fastTime = time * 0.4;
-
-            vec2 drift1 = vec2(sin(slowTime * 0.7) * 0.4, cos(slowTime * 0.5) * 0.3);
-            vec2 drift2 = vec2(cos(mediumTime * 0.3) * 0.2, sin(mediumTime * 0.4) * 0.25);
-            vec2 p = uv * 18.0 + drift1 + drift2;
-
-            float n1 = noise(p + vec2(slowTime * 0.2, slowTime * 0.15));
-            float n2 = noise(p * 2.5 + vec2(1.7 + mediumTime * 0.1, 2.3 + mediumTime * 0.08));
-            float n3 = noise(p * 5.2 + vec2(5.1 + fastTime * 0.05, 1.9 + fastTime * 0.06));
-            float n4 = noise(p * 10.8 + vec2(3.2 + fastTime * 0.03, 4.8 + fastTime * 0.04));
-
-            float weight1 = 0.35 + sin(slowTime * 0.6) * 0.05;
-            float weight2 = 0.25 + cos(mediumTime * 0.4) * 0.03;
-            float combined = n1 * weight1 + n2 * weight2 + n3 * 0.25 + n4 * 0.15;
-
-            float grainPulse = 1.0 + sin(mediumTime * 1.2) * 0.3;
-            float grain = sin(p.x * 1.5 + combined * 5.0 + slowTime * 0.5) * 0.15 * grainPulse;
-            combined += grain;
-
-            float swirl1 = sin(p.x * 0.4 + p.y * 0.6 + combined * 3.0 + slowTime * 1.2) * 0.12;
-            float swirl2 = sin(p.x * 0.7 - p.y * 0.3 + combined * 2.5 + mediumTime * 0.8) * 0.1;
-            float swirl3 = cos(p.x * 0.3 + p.y * 0.8 + combined * 4.0 + fastTime * 0.6) * 0.08;
-            combined += swirl1 + swirl2 + swirl3;
-
-            // Lava-lamp blobs drifting across the screen
-            vec2 centeredUv = (uv - 0.5) * 2.0;
-            float rotationAngle = slowTime * 0.3;
-            mat2 rot = mat2(cos(rotationAngle), -sin(rotationAngle), sin(rotationAngle), cos(rotationAngle));
-            vec2 rotatedUv = rot * centeredUv;
-
-            vec2 blobOffset1 = vec2(sin(slowTime * 0.6) * 0.35, cos(slowTime * 0.5) * 0.28);
-            vec2 blobOffset2 = vec2(cos(mediumTime * 0.7) * 0.25, sin(mediumTime * 0.6) * 0.32);
-            vec2 blobOffset3 = vec2(sin((slowTime + mediumTime) * 0.4) * 0.3, sin((slowTime - mediumTime) * 0.5) * 0.3);
-
-            float blob1 = smoothstep(0.58, 0.18, length(rotatedUv - blobOffset1));
-            float blob2 = smoothstep(0.62, 0.16, length(rotatedUv - blobOffset2));
-            float blob3 = smoothstep(0.6, 0.2, length(rotatedUv - blobOffset3));
-
-            float lavaMask = clamp((blob1 + blob2 + blob3) / 2.4, 0.0, 1.0);
-            float lavaPulse = 0.55 + 0.45 * sin(slowTime * 1.7 + uv.y * 4.5 + blob1 * 2.0);
-            lavaMask = pow(lavaMask * lavaPulse, 1.05);
-
-            float factionWave = sin(factionCycle);
-            float factionBlend = smoothstep(-0.25, 0.25, factionWave);
-            vec3 cycleBaseColor = mix(factionColorA, factionColorB, factionBlend);
-            vec3 lavaDeep = mix(vec3(0.16, 0.11, 0.07), cycleBaseColor, 0.55);
-            vec3 lavaBright = mix(cycleBaseColor, vec3(1.0, 0.95, 0.86), 0.35);
-            vec3 lavaColor = mix(lavaDeep, lavaBright, lavaMask);
-
-            combined = clamp(combined, 0.0, 1.0);
-            combined = pow(combined, 0.6);
-
-            vec3 darkBrown = vec3(0.58, 0.48, 0.32);
-            vec3 mediumBrown = vec3(0.72, 0.62, 0.45);
-            vec3 lightBrown = vec3(0.82, 0.74, 0.58);
-            vec3 tan = vec3(0.88, 0.82, 0.68);
-            vec3 lightTan = vec3(0.94, 0.90, 0.80);
-
-            vec3 finalColor;
-            if (combined < 0.2) {
-                finalColor = mix(darkBrown, mediumBrown, combined / 0.2);
-            } else if (combined < 0.4) {
-                finalColor = mix(mediumBrown, lightBrown, (combined - 0.2) / 0.2);
-            } else if (combined < 0.7) {
-                finalColor = mix(lightBrown, tan, (combined - 0.4) / 0.3);
-            } else {
-                finalColor = mix(tan, lightTan, (combined - 0.7) / 0.3);
-            }
-
-            float surface = noise(p * 24.0) * 0.04;
-            finalColor += surface;
-
-            float warmth = noise(p * 6.0 + vec2(slowTime * 0.1, mediumTime * 0.08)) * 0.025;
-            float breathing1 = sin(slowTime * 1.4) * 0.03;
-            float breathing2 = cos(mediumTime * 0.8) * 0.02;
-            float pulse = sin(fastTime * 0.5) * 0.015;
-
-            finalColor.r += warmth + (breathing1 + pulse) * 1.3;
-            finalColor.g += warmth * 0.9 + (breathing1 + breathing2) * 1.0;
-            finalColor.b += (breathing2 + pulse) * 0.2;
-
-            // Blend in lava lamp colors for a playful motion effect
-            finalColor = mix(finalColor, lavaColor, lavaMask * 0.55);
-            finalColor += lavaColor * lavaMask * 0.08;
-
-            vec2 windowCoords = screen_coords;
-            vec2 transformedCoords = (windowCoords - displayOffset) / displayScale;
-            float distFromGridCenter = distance(transformedCoords, gridCenter);
-            float vignetteRadius = gridSize * 0.9;
-            float vignette = 1.0 - smoothstep(vignetteRadius * 0.55, vignetteRadius * 1.05, distFromGridCenter);
-            vignette = pow(vignette, 0.7);
-
-            finalColor *= mix(0.65, 1.0, vignette);
-            finalColor = clamp(finalColor, 0.0, 1.0);
-
-            return vec4(finalColor, 1.0);
-        }
-    ]])
-
-    if success then
-        backgroundShader = shader
-
-        -- Precompute static uniforms shared with gameplay shader
-        local gridCenterX = GAME.CONSTANTS.GRID_ORIGIN_X + GAME.CONSTANTS.GRID_WIDTH / 2
-        local gridCenterY = GAME.CONSTANTS.GRID_ORIGIN_Y + GAME.CONSTANTS.GRID_HEIGHT / 2
-        backgroundShader:send("gridCenter", {gridCenterX, gridCenterY})
-        backgroundShader:send("gridSize", GAME.CONSTANTS.GRID_WIDTH)
-        backgroundShader:send("displayScale", SETTINGS.DISPLAY.SCALE)
-        backgroundShader:send("displayOffset", {SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY})
-
-        local blue = UI_COLORS.blueTeam
-        local red = UI_COLORS.redTeam
-        backgroundShader:send("factionColorA", {blue[1], blue[2], blue[3]})
-        backgroundShader:send("factionColorB", {red[1], red[2], red[3]})
-    else
-        backgroundShader = nil
-    end
-
+    -- Menus use shared static background image (loaded once).
+    -- Keep shader-based background only in gameplay/scenario gameplay.
+    return true
 end
 
 -- Match the UI colors with the main menu
@@ -2108,24 +2100,6 @@ local function isMouseOverButton(button, x, y)
            (y >= button.y and y <= button.y + button.height)
 end
 
-local function normalizeColor4(color, fallback)
-    local source = color or fallback or {1, 1, 1, 1}
-    local r = source[1] or 1
-    local g = source[2] or 1
-    local b = source[3] or 1
-    local a = source[4]
-    if a == nil then
-        a = 1
-    end
-    if r > 1 or g > 1 or b > 1 or a > 1 then
-        r = r / 255
-        g = g / 255
-        b = b / 255
-        a = a / 255
-    end
-    return r, g, b, a
-end
-
 -- Draw a tech-styled panel (same as main menu)
 local function drawTechPanel(x, y, width, height)
     uiTheme.drawTechPanel(x, y, width, height)
@@ -2170,39 +2144,75 @@ local function drawButton(button)
     if not button or button.visible == false then
         return
     end
-
-    local r, g, b, a = normalizeColor4(button.currentColor, UI_COLORS.button)
-    love.graphics.setColor(r, g, b, a)
-    love.graphics.rectangle("fill", button.x, button.y, button.width, button.height, 8)
-
-    local hovered = (button.currentColor == button.hoverColor) and (button.disabledVisual ~= true)
-    local focused = button.focused == true and button.disabledVisual ~= true
-    if hovered or focused then
-        love.graphics.setColor(1, 0.94, 0.86, 0.9)
-        love.graphics.setLineWidth(2.5)
-    else
-        local br, bg, bb, ba = normalizeColor4(button.borderColor, {0.45, 0.38, 0.31, 1})
-        love.graphics.setColor(br, bg, bb, ba)
-        love.graphics.setLineWidth(2)
-    end
-    love.graphics.rectangle("line", button.x, button.y, button.width, button.height, 8)
-    love.graphics.setLineWidth(1)
-
-    if button.disabledVisual == true then
-        love.graphics.setColor(1, 1, 1, 0.06)
-    else
-        love.graphics.setColor(1, 1, 1, 0.18)
-    end
-    love.graphics.rectangle("line", button.x + 3, button.y + 3, button.width - 6, button.height - 6, 6)
-
-    local tr, tg, tb, ta = normalizeColor4(button.textColor, {0.95, 0.88, 0.76, 1})
-    love.graphics.setColor(tr, tg, tb, ta)
-    love.graphics.printf(button.text or "", button.x, button.y + (button.textOffsetY or 15), button.width, "center")
-
+    uiTheme.drawButton(button)
 end
 
 local function drawTitle(text, x, y, width)
     uiTheme.drawTitle(text, x, y, width)
+end
+
+local function getTopInfoBarText()
+    local blueFaction = factionData and factionData[1] or nil
+    local text = blueFaction and blueFaction.description or nil
+    if type(text) ~= "string" then
+        text = tostring(text or "")
+    end
+    if text == "" then
+        return nil
+    end
+    return text
+end
+
+local function wrapInfoBarLines(font, text, maxWidth, maxLines)
+    local _, lines = font:getWrap(text, maxWidth)
+    if type(lines) ~= "table" or #lines == 0 then
+        lines = {text}
+    end
+    if #lines <= maxLines then
+        return lines
+    end
+
+    local trimmed = {}
+    for i = 1, maxLines do
+        trimmed[i] = lines[i]
+    end
+    local ellipsis = "..."
+    local last = trimmed[maxLines] or ""
+    while #last > 0 and font:getWidth(last .. ellipsis) > maxWidth do
+        last = last:sub(1, -2)
+    end
+    trimmed[maxLines] = last .. ellipsis
+    return trimmed
+end
+
+local function drawTopInfoBar(layout)
+    local text = getTopInfoBarText()
+    if not text then
+        return
+    end
+
+    local previousFont = love.graphics.getFont()
+    local infoFont = getMonogramFont(math.floor(clamp(SETTINGS.DISPLAY.HEIGHT * 0.03, 20, 28)))
+    love.graphics.setFont(infoFont)
+
+    local maxTextWidth = math.floor(clamp(SETTINGS.DISPLAY.WIDTH * 0.62, 460, 840))
+    local textWidthLimit = maxTextWidth
+    local lines = wrapInfoBarLines(infoFont, text, textWidthLimit, 2)
+    local textBlockHeight = #lines * infoFont:getHeight()
+    local minY = layout.logoY + layout.logoH + math.floor(clamp(SETTINGS.DISPLAY.HEIGHT * 0.006, 4, 8))
+    local preferredY = layout.cardsY - textBlockHeight - math.floor(clamp(SETTINGS.DISPLAY.HEIGHT * 0.005, 3, 7))
+    local textY = math.max(minY, preferredY)
+    if textY < 4 then
+        textY = 4
+    end
+
+    local textBlock = table.concat(lines, "\n")
+    love.graphics.setColor(0, 0, 0, 0.66)
+    love.graphics.printf(textBlock, 0, textY + 1, SETTINGS.DISPLAY.WIDTH, "center")
+    love.graphics.setColor(0.87, 0.94, 1.0, 0.98)
+    love.graphics.printf(textBlock, 0, textY, SETTINGS.DISPLAY.WIDTH, "center")
+
+    love.graphics.setFont(previousFont)
 end
 
 -- Draw faction card using card assets (similar to gameplay UI)
@@ -2460,21 +2470,6 @@ local function drawFactionCard(faction)
     love.graphics.setColor(faction.color)
     love.graphics.printf(faction.name, faction.x, faction.y + faction.height + 10, faction.width, "center")
 
-    -- Draw faction description
-    if faction.description and faction.description ~= "" then
-        if faction.factionIndex == 1 then
-            -- For BLUE faction, place description over the card with a subtle backdrop
-            local pad = 8
-            local overlayHeight = 26
-            local overlayY = 112
-            local overlayX = cardX + pad
-            local overlayW = cardWidth * cardScale - pad * 2
-
-            -- Description text centered inside the overlay
-            love.graphics.setColor(UI_COLORS.background)
-            love.graphics.printf(faction.description, overlayX + 6, overlayY + 4, overlayW - 12, "center")
-        end
-    end
 end
 
 local function formatOnlineReadyName(name, userId, fallbackLabel)
@@ -2599,8 +2594,9 @@ function factionSelect.enter(stateMachine, prevState, params)
     ANIM_STATE[1] = {tilt=0, vel=0, angle=0, angleV=0, sweep=0, sweepV=0}
     ANIM_STATE[2] = {tilt=0, vel=0, angle=0, angleV=0, sweep=0, sweepV=0}
     
-    -- Initialize card assets and shader
+    -- Initialize card assets
     initializeAssets()
+    refreshScreenLayout()
 
     -- Create UI elements
     uiElements = {
@@ -2610,10 +2606,10 @@ function factionSelect.enter(stateMachine, prevState, params)
         factions = {
             -- Faction 1 panel (Blue)
             {
-                x = SETTINGS.DISPLAY.WIDTH / 2 - 250,
-                y = 150,
-                width = 200,
-                height = 300,
+                x = screenLayout.cardsX,
+                y = screenLayout.cardsY,
+                width = screenLayout.cardW,
+                height = screenLayout.cardH,
                 name = factionData[1].name,
                 description = factionData[1].description,
                 color = factionData[1].color,
@@ -2622,10 +2618,10 @@ function factionSelect.enter(stateMachine, prevState, params)
             },
             -- Faction 2 panel (Red)
             {
-                x = SETTINGS.DISPLAY.WIDTH / 2 + 50,
-                y = 150,
-                width = 200,
-                height = 300,
+                x = screenLayout.cardsX + screenLayout.cardW + screenLayout.cardGap,
+                y = screenLayout.cardsY,
+                width = screenLayout.cardW,
+                height = screenLayout.cardH,
                 name = factionData[2].name,
                 description = factionData[2].description,
                 color = factionData[2].color,
@@ -2637,20 +2633,20 @@ function factionSelect.enter(stateMachine, prevState, params)
         selectors = {
             -- Blue faction selector
             {
-                x = SETTINGS.DISPLAY.WIDTH / 2 - 250,
-                y = 460,
-                width = 200,
-                height = 40,
+                x = screenLayout.cardsX,
+                y = screenLayout.selectorsY,
+                width = screenLayout.selectorW,
+                height = screenLayout.selectorH,
                 options = {},
                 currentOption = 1,
                 highlightTimer = 0
             },
             -- Red faction selector
             {
-                x = SETTINGS.DISPLAY.WIDTH / 2 + 50,
-                y = 460,
-                width = 200,
-                height = 40,
+                x = screenLayout.cardsX + screenLayout.selectorW + screenLayout.cardGap,
+                y = screenLayout.selectorsY,
+                width = screenLayout.selectorW,
+                height = screenLayout.selectorH,
                 options = {},
                 currentOption = 1,
                 highlightTimer = 0
@@ -2659,53 +2655,57 @@ function factionSelect.enter(stateMachine, prevState, params)
         buttons = {
             -- Back button (left)
             back = {
-                x = SETTINGS.DISPLAY.WIDTH / 2 - 315,
-                y = 550,
-                width = 120,
-                height = 50,
+                x = screenLayout.cardsX,
+                y = screenLayout.buttonY,
+                width = screenLayout.buttonW,
+                height = screenLayout.buttonH,
                 text = "Back",
                 currentColor = UI_COLORS.button,
                 hoverColor = UI_COLORS.buttonHover,
                 pressedColor = UI_COLORS.buttonPressed,
+                centerText = true,
                 pressed = false,
                 pressTimer = 0
             },
             -- Random button
             random = {
-                x = SETTINGS.DISPLAY.WIDTH / 2 - 145,
-                y = 550,
-                width = 120,
-                height = 50,
+                x = screenLayout.cardsX,
+                y = screenLayout.buttonY,
+                width = screenLayout.buttonW,
+                height = screenLayout.buttonH,
                 text = "Random",
                 currentColor = UI_COLORS.button,
                 hoverColor = UI_COLORS.buttonHover,
                 pressedColor = UI_COLORS.buttonPressed,
+                centerText = true,
                 pressed = false,
                 pressTimer = 0
             },
             -- Ready button (online mode)
             ready = {
-                x = SETTINGS.DISPLAY.WIDTH / 2 + 25,
-                y = 550,
-                width = 120,
-                height = 50,
+                x = screenLayout.cardsX,
+                y = screenLayout.buttonY,
+                width = screenLayout.buttonW,
+                height = screenLayout.buttonH,
                 text = "Ready",
                 currentColor = UI_COLORS.button,
                 hoverColor = UI_COLORS.buttonHover,
                 pressedColor = UI_COLORS.buttonPressed,
+                centerText = true,
                 pressed = false,
                 pressTimer = 0
             },
             -- Start button
             start = {
-                x = SETTINGS.DISPLAY.WIDTH / 2 + 195,
-                y = 550,
-                width = 120,
-                height = 50,
+                x = screenLayout.cardsX,
+                y = screenLayout.buttonY,
+                width = screenLayout.buttonW,
+                height = screenLayout.buttonH,
                 text = "Start Game",
                 currentColor = UI_COLORS.button,
                 hoverColor = UI_COLORS.buttonHover,
                 pressedColor = UI_COLORS.buttonPressed,
+                centerText = true,
                 pressed = false,
                 pressTimer = 0
             }
@@ -3363,54 +3363,21 @@ function factionSelect.draw()
     love.graphics.push()
     love.graphics.translate(SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY)
     love.graphics.scale(SETTINGS.DISPLAY.SCALE)
+    local previousFont = love.graphics.getFont()
 
-    -- Background with shader
-    if backgroundShader then
-        love.graphics.setShader(backgroundShader)
-        local timeNow = love.timer.getTime()
-        backgroundShader:send("time", timeNow)
+    menuBackground.draw()
 
-        -- Match gameplay shader uniforms for consistent visuals
-        backgroundShader:send("resolution", {SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT})
-        local gridCenterX = GAME.CONSTANTS.GRID_ORIGIN_X + GAME.CONSTANTS.GRID_WIDTH / 2
-        local gridCenterY = GAME.CONSTANTS.GRID_ORIGIN_Y + GAME.CONSTANTS.GRID_HEIGHT / 2
-        backgroundShader:send("gridCenter", {gridCenterX, gridCenterY})
-        backgroundShader:send("gridSize", GAME.CONSTANTS.GRID_WIDTH)
-        backgroundShader:send("displayScale", SETTINGS.DISPLAY.SCALE)
-        backgroundShader:send("displayOffset", {SETTINGS.DISPLAY.OFFSETX, SETTINGS.DISPLAY.OFFSETY})
-
-        local windowW, windowH = love.graphics.getDimensions()
-        backgroundShader:send("resolution", { windowW, windowH })
-
-        backgroundShader:send("factionCycle", timeNow * 0.9)
-
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
-        love.graphics.setShader() -- Reset shader
-    else
-        -- Fallback to solid color background if shader not available
-        love.graphics.setColor(UI_COLORS.background)
-        love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
+    local currentLayout = screenLayout or computeFactionScreenLayout()
+    local logo = loadLogoImageOnce()
+    if logo then
+        local logoScaleX = currentLayout.logoW / logo:getWidth()
+        local logoScaleY = currentLayout.logoH / logo:getHeight()
+        love.graphics.setColor(0, 0, 0, 0.28)
+        love.graphics.draw(logo, currentLayout.logoX + 2, currentLayout.logoY + 3, 0, logoScaleX, logoScaleY)
+        love.graphics.setColor(1, 1, 1, 0.95)
+        love.graphics.draw(logo, currentLayout.logoX, currentLayout.logoY, 0, logoScaleX, logoScaleY)
     end
-
-    -- Draw tech-style decorative elements (same as main menu)
-    -- Left vertical accent line
-    love.graphics.setColor(UI_COLORS.border)
-    love.graphics.setLineWidth(2)
-    love.graphics.line(80, 100, 80, SETTINGS.DISPLAY.HEIGHT - 100)
-
-    -- Right vertical accent line
-    love.graphics.line(SETTINGS.DISPLAY.WIDTH - 80, 100, SETTINGS.DISPLAY.WIDTH - 80, SETTINGS.DISPLAY.HEIGHT - 100)
-
-    -- Horizontal accent line at the bottom
-    love.graphics.line(120, SETTINGS.DISPLAY.HEIGHT - 80, SETTINGS.DISPLAY.WIDTH - 120, SETTINGS.DISPLAY.HEIGHT - 80)
-    love.graphics.setLineWidth(1)
-
-    -- Main title panel
-    drawTechPanel(SETTINGS.DISPLAY.WIDTH / 2 - 150, 40, 300, 60)
-
-    -- Title with glow effect
-    drawTitle(uiElements.title.text, 0, 60, SETTINGS.DISPLAY.WIDTH)
+    drawTopInfoBar(currentLayout)
 
     -- Draw faction cards instead of panels
     for i, faction in ipairs(uiElements.factions) do
@@ -3546,6 +3513,7 @@ function factionSelect.draw()
     end
 
     -- Draw action buttons from a single visible-source list
+    love.graphics.setFont(getMonogramFont(currentLayout.buttonFontSize))
     local visibleButtons = getVisibleButtons()
     for _, buttonDef in ipairs(visibleButtons) do
         local buttonKey = buttonDef.__key
@@ -3557,9 +3525,24 @@ function factionSelect.draw()
         drawButton(buttonDef)
     end
 
-    -- Add version info at bottom (like main menu)
-    love.graphics.setColor(UI_COLORS.background)
-    love.graphics.printf("Copyright Flipped Cat - Version " .. VERSION, 0, SETTINGS.DISPLAY.HEIGHT - 50, SETTINGS.DISPLAY.WIDTH, "center")
+    -- Footer, aligned to the right like main menu.
+    local footerText = "Copyright Flipped Cat - Version " .. tostring(VERSION)
+    if PLATFORM_BUILD_LABEL and PLATFORM_BUILD_LABEL ~= "" then
+        footerText = footerText .. " - " .. tostring(PLATFORM_BUILD_LABEL)
+    end
+    local footerFont = getMonogramFont(currentLayout.footerFontSize)
+    local footerY = SETTINGS.DISPLAY.HEIGHT - footerFont:getHeight() - 14
+    local footerX = SETTINGS.DISPLAY.WIDTH - footerFont:getWidth(footerText) - 18
+    if footerX < 12 then
+        footerX = 12
+    end
+    love.graphics.setFont(footerFont)
+    love.graphics.setColor(0, 0, 0, 0.56)
+    love.graphics.print(footerText, footerX + 1, footerY + 1)
+    love.graphics.setColor(0.97, 0.95, 0.90, 0.9)
+    love.graphics.print(footerText, footerX, footerY)
+
+    love.graphics.setFont(previousFont)
 
     -- Draw confirmation dialog if active (above everything else)
     if ConfirmDialog and ConfirmDialog.draw then
@@ -3587,9 +3570,6 @@ function factionSelect.exit()
     cardAssets.bluFactionImage = nil
     cardAssets.redFactionImage = nil
     
-    -- Clean up shader
-    backgroundShader = nil
-
     -- Clean up UI elements
     uiElements = {}
     collectgarbage("collect")

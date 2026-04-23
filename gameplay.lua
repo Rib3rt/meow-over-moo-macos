@@ -85,7 +85,10 @@ local onlineAutoAdvanceState = {
     scenarioOutcomeModalShown = false,
     matchObjectiveSecondaryButtonBounds = nil,
     matchObjectiveFocusedButton = "primary",
-    matchObjectiveHoveredButton = nil
+    matchObjectiveHoveredButton = nil,
+    singleCandidateKey = nil,
+    singleCandidateSince = nil,
+    singleIssuedKey = nil
 }
 -- Don't initialize with default value, always use GAME.CURRENT values
 -- AI always plays optimally - no difficulty levels
@@ -160,6 +163,80 @@ onlineAutoAdvanceState.buildKey = function(actionType, phaseInfo)
         tostring(phaseInfo.turnPhaseName or "-"),
         tostring(phaseInfo.currentPlayer or "-")
     }, "|")
+end
+
+onlineAutoAdvanceState.resetSinglePlayerCandidate = function()
+    onlineAutoAdvanceState.singleCandidateKey = nil
+    onlineAutoAdvanceState.singleCandidateSince = nil
+end
+
+onlineAutoAdvanceState.getSinglePlayerRequest = function(gameplayBlocked)
+    if gameplayBlocked
+        or gameMode ~= GAME.MODE.SINGLE_PLAYER
+        or not gameRuler
+        or matchObjectiveModalVisible
+        or unitCodexVisible
+        or onlineEloSummaryVisible
+        or (ConfirmDialog and type(ConfirmDialog.isActive) == "function" and ConfirmDialog.isActive())
+        or (GameLogViewer and type(GameLogViewer.isActive) == "function" and GameLogViewer.isActive()) then
+        return nil
+    end
+
+    local phaseInfo = gameRuler:getCurrentPhaseInfo() or {}
+    local currentPhase = tostring(phaseInfo.currentPhase or "")
+    local currentTurnPhase = tostring(phaseInfo.turnPhaseName or "")
+    local currentPlayer = tonumber(phaseInfo.currentPlayer)
+    local aiPlayerNumber = tonumber((GAME.CURRENT and GAME.CURRENT.AI_PLAYER_NUMBER) or -1)
+
+    if currentPhase == "gameOver" then
+        return nil
+    end
+
+    -- AI phases remain controlled by the AI runtime, not by UI auto-advance.
+    if currentPlayer == aiPlayerNumber then
+        return nil
+    end
+
+    if currentPhase == "setup" then
+        if gameRuler.neutralBuildingPlacementInProgress or gameRuler:isAnimationInProgress() then
+            return nil
+        end
+        return {
+            actionType = "placeAllNeutralBuildings",
+            source = "single_auto_setup_rocks",
+            key = onlineAutoAdvanceState.buildKey("placeAllNeutralBuildings", phaseInfo)
+        }
+    end
+
+    if currentPhase == "deploy1_units" or currentPhase == "deploy2_units" then
+        if not gameRuler:isInitialDeploymentComplete() or gameRuler:isAnimationInProgress() then
+            return nil
+        end
+        return {
+            actionType = "confirmDeployment",
+            source = "single_auto_deployment_complete",
+            key = onlineAutoAdvanceState.buildKey("confirmDeployment", phaseInfo)
+        }
+    end
+
+    if currentPhase == "turn" and currentTurnPhase == "actions" then
+        if gameRuler:isAnimationInProgress() then
+            return nil
+        end
+        if type(gameRuler.checkForStalledUnits) == "function" then
+            gameRuler:checkForStalledUnits()
+        end
+        if not gameRuler:areActionsComplete() then
+            return nil
+        end
+        return {
+            actionType = "end_turn",
+            source = "single_auto_actions_complete",
+            key = onlineAutoAdvanceState.buildKey("end_turn", phaseInfo)
+        }
+    end
+
+    return nil
 end
 
 onlineAutoAdvanceState.getRequest = function(gameplayBlocked)
@@ -3472,6 +3549,9 @@ local function initializeComponents()
     onlineAutoAdvanceState.candidateKey = nil
     onlineAutoAdvanceState.candidateSince = nil
     onlineAutoAdvanceState.issuedKey = nil
+    onlineAutoAdvanceState.singleCandidateKey = nil
+    onlineAutoAdvanceState.singleCandidateSince = nil
+    onlineAutoAdvanceState.singleIssuedKey = nil
     matchObjectiveModalVisible = false
     matchObjectiveCloseButtonBounds = nil
     onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
@@ -4411,6 +4491,37 @@ function gameplay.update(dt)
         onlineAutoAdvanceState.resetCandidate()
         if not isOnlineModeActive() then
             onlineAutoAdvanceState.issuedKey = nil
+        end
+    end
+
+    local singlePlayerAutoAdvanceRequest = onlineAutoAdvanceState.getSinglePlayerRequest(gameplayBlocked)
+    if singlePlayerAutoAdvanceRequest then
+        local advanceKey = singlePlayerAutoAdvanceRequest.key
+
+        if onlineAutoAdvanceState.singleIssuedKey and onlineAutoAdvanceState.singleIssuedKey ~= advanceKey then
+            onlineAutoAdvanceState.singleIssuedKey = nil
+        end
+
+        if onlineAutoAdvanceState.singleIssuedKey ~= advanceKey then
+            local now = getOnlineNowSeconds()
+            if onlineAutoAdvanceState.singleCandidateKey ~= advanceKey then
+                onlineAutoAdvanceState.singleCandidateKey = advanceKey
+                onlineAutoAdvanceState.singleCandidateSince = now
+            elseif (now - tonumber(onlineAutoAdvanceState.singleCandidateSince or now)) >= 0.12 then
+                local ok = executeOrQueueCommand({ actionType = singlePlayerAutoAdvanceRequest.actionType })
+                if ok then
+                    clearActiveUnitSelection()
+                    onlineAutoAdvanceState.singleIssuedKey = advanceKey
+                    onlineAutoAdvanceState.resetSinglePlayerCandidate()
+                else
+                    onlineAutoAdvanceState.singleCandidateSince = now
+                end
+            end
+        end
+    else
+        onlineAutoAdvanceState.resetSinglePlayerCandidate()
+        if gameMode ~= GAME.MODE.SINGLE_PLAYER then
+            onlineAutoAdvanceState.singleIssuedKey = nil
         end
     end
 
