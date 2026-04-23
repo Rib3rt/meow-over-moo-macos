@@ -344,6 +344,17 @@ runTest("automatic_online_phase_button_is_hidden_except_commandant_confirm", fun
     assertTrue(content:find('if currentPhase == "turn" and turnPhaseName == "actions" then', 1, true) ~= nil, "actions auto end-turn should hide phase button")
 end)
 
+runTest("automatic_local_multiplayer_phase_button_is_hidden_except_commandant_confirm", function()
+    local uiContent = readFile("uiClass.lua")
+    local gameplayContent = readFile("gameplay.lua")
+    assertTrue(type(uiContent) == "string", "uiClass.lua not readable")
+    assertTrue(type(gameplayContent) == "string", "gameplay.lua not readable")
+    assertTrue(uiContent:find("mode ~= GAME.MODE.SINGLE_PLAYER and mode ~= GAME.MODE.MULTYPLAYER_LOCAL", 1, true) ~= nil, "local multiplayer should use automatic phase-button hiding")
+    assertTrue(uiContent:find('if actionType == "confirmCommandHub" then', 1, true) ~= nil, "commandant confirm should stay manual in local multiplayer")
+    assertTrue(gameplayContent:find("local isLocalMultiplayer = mode == GAME.MODE.MULTYPLAYER_LOCAL", 1, true) ~= nil, "local multiplayer auto-advance mode guard missing")
+    assertTrue(gameplayContent:find("or (not isSinglePlayer and not isLocalMultiplayer)", 1, true) ~= nil, "local multiplayer auto-advance enable condition missing")
+end)
+
 runTest("reaction_buttons_join_readonly_allowed_ui_controls", function()
     local content = readFile("gameplay.lua")
     assertTrue(type(content) == "string", "gameplay.lua not readable")

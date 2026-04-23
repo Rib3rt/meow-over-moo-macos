@@ -171,8 +171,12 @@ onlineAutoAdvanceState.resetSinglePlayerCandidate = function()
 end
 
 onlineAutoAdvanceState.getSinglePlayerRequest = function(gameplayBlocked)
+    local mode = gameMode
+    local isSinglePlayer = mode == GAME.MODE.SINGLE_PLAYER
+    local isLocalMultiplayer = mode == GAME.MODE.MULTYPLAYER_LOCAL
+
     if gameplayBlocked
-        or gameMode ~= GAME.MODE.SINGLE_PLAYER
+        or (not isSinglePlayer and not isLocalMultiplayer)
         or not gameRuler
         or matchObjectiveModalVisible
         or unitCodexVisible
@@ -193,7 +197,8 @@ onlineAutoAdvanceState.getSinglePlayerRequest = function(gameplayBlocked)
     end
 
     -- AI phases remain controlled by the AI runtime, not by UI auto-advance.
-    if currentPlayer == aiPlayerNumber then
+    -- This applies only in single player mode.
+    if isSinglePlayer and currentPlayer == aiPlayerNumber then
         return nil
     end
 
@@ -4494,9 +4499,9 @@ function gameplay.update(dt)
         end
     end
 
-    local singlePlayerAutoAdvanceRequest = onlineAutoAdvanceState.getSinglePlayerRequest(gameplayBlocked)
-    if singlePlayerAutoAdvanceRequest then
-        local advanceKey = singlePlayerAutoAdvanceRequest.key
+    local localAutoAdvanceRequest = onlineAutoAdvanceState.getSinglePlayerRequest(gameplayBlocked)
+    if localAutoAdvanceRequest then
+        local advanceKey = localAutoAdvanceRequest.key
 
         if onlineAutoAdvanceState.singleIssuedKey and onlineAutoAdvanceState.singleIssuedKey ~= advanceKey then
             onlineAutoAdvanceState.singleIssuedKey = nil
@@ -4508,7 +4513,7 @@ function gameplay.update(dt)
                 onlineAutoAdvanceState.singleCandidateKey = advanceKey
                 onlineAutoAdvanceState.singleCandidateSince = now
             elseif (now - tonumber(onlineAutoAdvanceState.singleCandidateSince or now)) >= 0.12 then
-                local ok = executeOrQueueCommand({ actionType = singlePlayerAutoAdvanceRequest.actionType })
+                local ok = executeOrQueueCommand({ actionType = localAutoAdvanceRequest.actionType })
                 if ok then
                     clearActiveUnitSelection()
                     onlineAutoAdvanceState.singleIssuedKey = advanceKey
@@ -4520,7 +4525,7 @@ function gameplay.update(dt)
         end
     else
         onlineAutoAdvanceState.resetSinglePlayerCandidate()
-        if gameMode ~= GAME.MODE.SINGLE_PLAYER then
+        if gameMode ~= GAME.MODE.SINGLE_PLAYER and gameMode ~= GAME.MODE.MULTYPLAYER_LOCAL then
             onlineAutoAdvanceState.singleIssuedKey = nil
         end
     end

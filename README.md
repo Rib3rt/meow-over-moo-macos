@@ -34,6 +34,13 @@ All current and future changes for scenario mode must stay isolated to scenario 
 - Standard modes (single player, AI vs AI, online) must keep existing behavior unchanged.
 - If a change cannot be isolated safely, do not merge it into this branch until isolation is implemented.
 
+## Turn Phase Confirmation UX (2026-04-23)
+
+- `SINGLE_PLAYER`: manual phase button remains only for Commandant placement confirmation (`confirmCommandHub`).
+- `MULTYPLAYER_LOCAL`: same behavior as single player (manual confirm only for Commandant placement).
+- Setup rocks, initial deployment confirmation, and end-turn action confirmation are auto-accepted.
+- `MULTYPLAYER_NET`: unchanged; same automatic phase flow remains active with online turn ownership/reaction controls.
+
 ## Requirements
 
 - macOS on Apple Silicon

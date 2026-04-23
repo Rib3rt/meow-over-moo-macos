@@ -4201,7 +4201,7 @@ function uiClass:drawPhaseButtonStandard(x, y, width, height, phaseInfo, colors)
         return
     end
 
-    -- In single player, keep manual confirmation only for Commandant placement.
+    -- In local human modes, keep manual confirmation only for Commandant placement.
     -- Every other phase transition is auto-accepted by gameplay flow.
     if self:shouldHideAutomaticSinglePlayerPhaseButton(phaseInfo, buttonInfo) then
         self.pulsing.active = false
@@ -4485,7 +4485,8 @@ function uiClass:shouldHideAutomaticOnlinePhaseButton(phaseInfo, buttonInfo)
 end
 
 function uiClass:shouldHideAutomaticSinglePlayerPhaseButton(phaseInfo, buttonInfo)
-    if GAME.CURRENT.MODE ~= GAME.MODE.SINGLE_PLAYER then
+    local mode = GAME.CURRENT and GAME.CURRENT.MODE or nil
+    if mode ~= GAME.MODE.SINGLE_PLAYER and mode ~= GAME.MODE.MULTYPLAYER_LOCAL then
         return false
     end
 
