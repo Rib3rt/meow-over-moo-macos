@@ -3762,6 +3762,102 @@ function uiClass:drawPhaseInfo(x, y, width, height, gameRuler)
     self:drawComicStyleActionPanel(x, y, width, height, phaseInfo)
 end
 
+function uiClass:getAIPanelPhaseKey(phaseInfo)
+    local currentPlayer = (phaseInfo and phaseInfo.currentPlayer) or (self.gameRuler and self.gameRuler.currentPlayer)
+    return table.concat({
+        tostring((GAME and GAME.CURRENT and GAME.CURRENT.TURN) or "?"),
+        tostring(currentPlayer or "?"),
+        tostring(phaseInfo and phaseInfo.currentPhase or "?"),
+        tostring(phaseInfo and phaseInfo.turnPhaseName or "?"),
+        tostring(currentPlayer or "?")
+    }, ":")
+end
+
+function uiClass:isAIControlledPhasePanelTurn(phaseInfo)
+    if not (GAME and GAME.CURRENT and GAME.MODE and phaseInfo) then
+        return false
+    end
+    if phaseInfo.currentPhase == "gameOver" then
+        return false
+    end
+    if GAME.CURRENT.MODE == GAME.MODE.AI_VS_AI then
+        return true
+    end
+    if GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER or GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
+        return phaseInfo.currentPlayer == GAME.CURRENT.AI_PLAYER_NUMBER
+    end
+    return false
+end
+
+function uiClass:getAIPhasePanelStatus(phaseInfo)
+    if not self:isAIControlledPhasePanelTurn(phaseInfo) then
+        return nil
+    end
+
+    local status = GAME and GAME.CURRENT and GAME.CURRENT.AI_PANEL_STATUS or nil
+    local phaseKey = self:getAIPanelPhaseKey(phaseInfo)
+    if status and status.phaseKey == phaseKey and status.status == "done" then
+        return "done"
+    end
+    return "thinking"
+end
+
+function uiClass:drawAIThinkingSpinner(cx, cy, radius, color)
+    local now = love.timer and love.timer.getTime and love.timer.getTime() or os.clock()
+    local dots = 8
+    for index = 1, dots do
+        local phase = (index - 1) / dots
+        local angle = (now * 5.2) + (phase * math.pi * 2)
+        local pulse = (phase + now * 1.8) % 1
+        local alpha = 0.22 + ((1 - pulse) * 0.68)
+        local dotRadius = 2.2 + ((1 - pulse) * 1.4)
+        love.graphics.setColor(color[1], color[2], color[3], alpha)
+        love.graphics.circle(
+            "fill",
+            cx + math.cos(angle) * radius,
+            cy + math.sin(angle) * radius,
+            dotRadius
+        )
+    end
+end
+
+function uiClass:drawAIDoneMark(cx, cy, radius, color)
+    love.graphics.setColor(color[1], color[2], color[3], 0.95)
+    love.graphics.setLineWidth(3)
+    love.graphics.line(
+        cx - radius * 0.72,
+        cy + radius * 0.02,
+        cx - radius * 0.22,
+        cy + radius * 0.50,
+        cx + radius * 0.78,
+        cy - radius * 0.55
+    )
+    love.graphics.setLineWidth(1)
+end
+
+function uiClass:drawAIPhasePanelStatus(status, bubbleX, bubbleY, bubbleWidth, bubbleHeight, textColor)
+    local label = status == "done" and "Done" or "Thinking"
+    local font = love.graphics.getFont()
+    local iconSize = 24
+    local gap = 12
+    local labelWidth = font:getWidth(label)
+    local totalWidth = iconSize + gap + labelWidth
+    local startX = bubbleX + math.max(12, (bubbleWidth - totalWidth) / 2)
+    local centerY = bubbleY + bubbleHeight * 0.46
+    local iconX = startX + iconSize / 2
+    local textX = startX + iconSize + gap
+    local textY = centerY - font:getHeight() / 2
+
+    if status == "done" then
+        self:drawAIDoneMark(iconX, centerY, iconSize * 0.42, textColor)
+    else
+        self:drawAIThinkingSpinner(iconX, centerY, iconSize * 0.34, textColor)
+    end
+
+    love.graphics.setColor(textColor)
+    love.graphics.print(label, textX, textY)
+end
+
 function uiClass:drawComicStyleActionPanel(x, y, width, height, phaseInfo)
     -- In online matches, keep action-panel avatar/theme tied to the local faction.
     local currentPlayer = (phaseInfo and phaseInfo.currentPlayer) or 1
@@ -3869,11 +3965,16 @@ function uiClass:drawComicStyleActionPanel(x, y, width, height, phaseInfo)
     local textY = bubbleY + 10  -- Start text higher up in the bubble
     local textWidth = bubbleWidth - textPadding * 2
 
-    -- Get action description
-    local actionText = self:getActionDescription(phaseInfo)
+    local aiPanelStatus = self:getAIPhasePanelStatus(phaseInfo)
+    if aiPanelStatus then
+        self:drawAIPhasePanelStatus(aiPanelStatus, bubbleX, bubbleY, bubbleWidth, bubbleHeight, textColor)
+    else
+        -- Get action description
+        local actionText = self:getActionDescription(phaseInfo)
 
-    -- Draw the text with comic-style formatting
-    love.graphics.printf(actionText, textX - 8, textY - 8, textWidth, "left")
+        -- Draw the text with comic-style formatting
+        love.graphics.printf(actionText, textX - 8, textY - 8, textWidth, "left")
+    end
     
     -- Restore original font
     love.graphics.setFont(defaultFont)

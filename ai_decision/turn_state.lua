@@ -44,6 +44,225 @@ function M.mixin(aiClass, shared)
     local deepMerge = shared.deepMerge
     local hashPosition = shared.hashPosition
     local buildMovePatternKey = shared.buildMovePatternKey
+
+    local function buildPhaseKey(ai, info)
+        if not info then
+            return "unknown"
+        end
+        return table.concat({
+            tostring((GAME and GAME.CURRENT and GAME.CURRENT.TURN) or "?"),
+            tostring(info.currentPlayer or "?"),
+            tostring(info.currentPhase or "?"),
+            tostring(info.turnPhaseName or "?"),
+            tostring(ai and ai.factionId or "?")
+        }, ":")
+    end
+
+    local function nowSeconds()
+        if love and love.timer and love.timer.getTime then
+            return love.timer.getTime()
+        end
+        return os.clock()
+    end
+
+    local function setAiPanelStatus(ai, phaseKey, status)
+        if not (GAME and GAME.CURRENT) then
+            return
+        end
+        GAME.CURRENT.AI_PANEL_STATUS = {
+            phaseKey = phaseKey,
+            player = ai and ai.factionId or nil,
+            status = status,
+            updatedAt = nowSeconds()
+        }
+    end
+
+    local function clearAiPanelStatus(ai, phaseKey)
+        if not (GAME and GAME.CURRENT and GAME.CURRENT.AI_PANEL_STATUS) then
+            return
+        end
+        local current = GAME.CURRENT.AI_PANEL_STATUS
+        if current.phaseKey == phaseKey and current.player == (ai and ai.factionId or nil) then
+            GAME.CURRENT.AI_PANEL_STATUS = nil
+        end
+    end
+
+    local function schedulerConfigFor(ai)
+        return ((ai and ai.AI_PARAMS or {}).SCHEDULER or {})
+    end
+
+    local function schedulerNumber(ai, key, fallback)
+        local value = schedulerConfigFor(ai)[key]
+        if type(value) == "number" then
+            return value
+        end
+        return fallback
+    end
+
+    local function schedulerEnabled(ai, key, fallback)
+        local value = schedulerConfigFor(ai)[key]
+        if value == nil then
+            return fallback
+        end
+        return value == true
+    end
+
+    function aiClass:startAsyncActionsDecision(state, phaseKey)
+        local scheduler = schedulerConfigFor(self)
+        if schedulerEnabled(self, "AI_DECISION_ASYNC_ENABLED", false) ~= true then
+            return false
+        end
+        if not (coroutine and coroutine.create and coroutine.resume and coroutine.status) then
+            return false
+        end
+        if self.isTournamentAiEnabled and not self:isTournamentAiEnabled() then
+            return false
+        end
+        if self._aiDecisionJob then
+            if self._aiDecisionJob.phaseKey == phaseKey then
+                return true
+            end
+            self._aiDecisionJob.cancelled = true
+            self._aiDecisionJob = nil
+        end
+
+        local sliceMs = math.max(1, schedulerNumber(self, "AI_DECISION_SLICE_MS", 6))
+        local resumeDelay = math.max(0, schedulerNumber(self, "AI_DECISION_RESUME_DELAY", 0))
+        local pollDelay = math.max(0.01, schedulerNumber(self, "ANIMATION_POLL_INTERVAL", 0.05))
+        local slowWallMs = math.max(0, schedulerNumber(self, "AI_DECISION_MAX_WALL_MS", 1500))
+        local asyncSoftBudget = schedulerNumber(self, "AI_DECISION_ASYNC_SOFT_BUDGET_MS", nil)
+        local asyncHardBudget = schedulerNumber(self, "AI_DECISION_ASYNC_HARD_BUDGET_MS", nil)
+
+        local job = {
+            phaseKey = phaseKey,
+            state = state,
+            startedAt = nowSeconds(),
+            computeMs = 0,
+            slices = 0,
+            currentSliceStart = nil,
+            loggedSlow = false,
+            cancelled = false
+        }
+
+        local function computeElapsedMs()
+            local elapsed = job.computeMs
+            if job.currentSliceStart then
+                elapsed = elapsed + ((nowSeconds() - job.currentSliceStart) * 1000)
+            end
+            return elapsed
+        end
+
+        local function shouldYield()
+            if not job.currentSliceStart then
+                return false
+            end
+            return ((nowSeconds() - job.currentSliceStart) * 1000) >= sliceMs
+        end
+
+        local co = coroutine.create(function()
+            return self:getBestSequence(state, {
+                cooperative = true,
+                budgetElapsedMs = computeElapsedMs,
+                shouldYield = shouldYield,
+                tournamentSoftBudgetMs = asyncSoftBudget,
+                tournamentHardBudgetMs = asyncHardBudget
+            })
+        end)
+        job.co = co
+        self._aiDecisionJob = job
+        setAiPanelStatus(self, phaseKey, "thinking")
+
+        local resumeJob
+        local function scheduleNext(delay)
+            if self.gameRuler and self.gameRuler.scheduleAction then
+                self.gameRuler:scheduleAction(delay or resumeDelay, resumeJob)
+            end
+        end
+
+        resumeJob = function()
+            if self._aiDecisionJob ~= job or job.cancelled then
+                return
+            end
+
+            local livePhaseInfo = nil
+            if self.gameRuler and self.gameRuler.getCurrentPhaseInfo then
+                livePhaseInfo = self.gameRuler:getCurrentPhaseInfo()
+            end
+            if buildPhaseKey(self, livePhaseInfo) ~= phaseKey then
+                job.cancelled = true
+                self._aiDecisionJob = nil
+                self.isProcessingTurn = false
+                clearAiPanelStatus(self, phaseKey)
+                return
+            end
+
+            if self.gameRuler
+                and self.gameRuler.hasActiveAnimations
+                and self.gameRuler:hasActiveAnimations() then
+                scheduleNext(pollDelay)
+                return
+            end
+
+            if slowWallMs > 0 and not job.loggedSlow then
+                local wallMs = (nowSeconds() - job.startedAt) * 1000
+                if wallMs >= slowWallMs then
+                    job.loggedSlow = true
+                    logger.warn("AI", string.format(
+                        "AI_ASYNC_DECISION_SLOW player=%s phase=%s wallMs=%.1f computeMs=%.1f sliceMs=%.1f",
+                        tostring(self.factionId),
+                        tostring(phaseKey),
+                        wallMs,
+                        computeElapsedMs(),
+                        sliceMs
+                    ))
+                end
+            end
+
+            job.currentSliceStart = nowSeconds()
+            local ok, sequenceOrYield = coroutine.resume(co)
+            local sliceElapsed = (nowSeconds() - job.currentSliceStart) * 1000
+            job.computeMs = job.computeMs + sliceElapsed
+            job.slices = job.slices + 1
+            job.currentSliceStart = nil
+
+            if not ok then
+                self._aiDecisionJob = nil
+                self.isProcessingTurn = false
+                self.actionsPhaseStarted = false
+                setAiPanelStatus(self, phaseKey, "done")
+                logger.warn("AI", string.format(
+                    "AI_ASYNC_DECISION_ERROR player=%s phase=%s error=%s",
+                    tostring(self.factionId),
+                    tostring(phaseKey),
+                    tostring(sequenceOrYield)
+                ))
+                return
+            end
+
+            if coroutine.status(co) == "dead" then
+                self._aiDecisionJob = nil
+                setAiPanelStatus(self, phaseKey, "done")
+                local actionCount = type(sequenceOrYield) == "table" and #sequenceOrYield or 0
+                logger.warn("AI", string.format(
+                    "AI_ASYNC_DECISION_DONE player=%s phase=%s wallMs=%.1f computeMs=%.1f slices=%d actions=%d",
+                    tostring(self.factionId),
+                    tostring(phaseKey),
+                    (nowSeconds() - job.startedAt) * 1000,
+                    job.computeMs,
+                    job.slices,
+                    actionCount
+                ))
+                self:executeActionsSequence(sequenceOrYield or {})
+                return
+            end
+
+            scheduleNext(resumeDelay)
+        end
+
+        scheduleNext(0)
+        return true
+    end
+
     --[[
     SECTION: TURN PHASE ORCHESTRATION
     Schedules AI processing for each phase after a short delay so animations can finish cleanly.
@@ -51,8 +270,10 @@ function M.mixin(aiClass, shared)
     - Delegates to specific handlers for setup, deployment, and action phases.
     ]]
     function aiClass:handleAITurn(phaseInfo, grid)
-        -- Skip processing while grid animations run.
-        if grid and grid.movingUnits and #grid.movingUnits > ZERO then
+        -- Skip processing while any grid animation/effect runs.
+        if self.gameRuler
+            and self.gameRuler.hasActiveAnimations
+            and self.gameRuler:hasActiveAnimations() then
             return
         end
 
@@ -60,7 +281,32 @@ function M.mixin(aiClass, shared)
         local defaultTurnFlowConfig = DEFAULT_SCORE_PARAMS.TURN_FLOW or {}
         local startDelay = valueOr(turnFlowConfig.START_DELAY, valueOr(defaultTurnFlowConfig.START_DELAY, ZERO))
 
+        local scheduledKey = buildPhaseKey(self, phaseInfo)
+        if self._scheduledAITurnKey == scheduledKey then
+            return
+        end
+        self._scheduledAITurnKey = scheduledKey
+
         self.gameRuler:scheduleAction(startDelay, function()
+            self._scheduledAITurnKey = nil
+
+            -- The scheduled callback can fire after a new visual action started.
+            -- Recheck here so a stale AI start cannot freeze an in-flight animation.
+            if self.gameRuler
+                and self.gameRuler.hasActiveAnimations
+                and self.gameRuler:hasActiveAnimations() then
+                return
+            end
+
+            local livePhaseInfo = phaseInfo
+            if self.gameRuler and self.gameRuler.getCurrentPhaseInfo then
+                livePhaseInfo = self.gameRuler:getCurrentPhaseInfo()
+            end
+            if buildPhaseKey(self, livePhaseInfo) ~= scheduledKey then
+                return
+            end
+            phaseInfo = livePhaseInfo
+
             -- Route handling based on the current game phase.
             if phaseInfo.currentPhase == "setup" and self.factionId == ONE then
                 self:handleAINeutralBuildingPlacement()
@@ -119,8 +365,12 @@ function M.mixin(aiClass, shared)
                             totalUnitsOnGrid = currentState.units and #currentState.units or ZERO,
                             winChance = string.format("%.1f%%", winPercentage)
                         })
-                        local moveSequence = self:getBestSequence(currentState)
-                        self:executeActionsSequence(moveSequence)
+                        if not self:startAsyncActionsDecision(currentState, scheduledKey) then
+                            setAiPanelStatus(self, scheduledKey, "thinking")
+                            local moveSequence = self:getBestSequence(currentState)
+                            setAiPanelStatus(self, scheduledKey, "done")
+                            self:executeActionsSequence(moveSequence)
+                        end
                     end
                 elseif phaseInfo.turnPhaseName == "commandHub" then
                     -- Commandant defense resolves separately inside nextTurn().

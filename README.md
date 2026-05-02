@@ -4,11 +4,21 @@ macOS native non-puzzle release branch of **Meow Over Moo** (Apple Silicon targe
 
 ## Release Status
 
-- Baseline status: stable
+- Baseline status: release candidate
+- RC promoted: 2026-05-02
 - Open blocking issues: none
 - Open TODO for current release baseline: none
+- Canonical AI runtime: Tournament V2
 
 See `KNOWN_ISSUES.md` for the current snapshot.
+
+## AI Runtime Status (2026-05-02)
+
+- Synced from the canonical `MeowOverMoo` RC runtime.
+- Tournament V2 is the playable AI route.
+- Legacy tournament fallback is disabled; the remaining fallback path is technical safety only.
+- Runtime test/debug logging is off by default for RC.
+- Latest RC validation summary: `docs/RC_2026-05-02.md`.
 
 ## Scenario Mode Status (2026-04-15)
 
@@ -76,7 +86,8 @@ Primary scripts in `scripts/`:
 
 - `input_smoke.lua`
 - `ui_consistency_smoke.lua`
-- `ai_regression.lua`
+- `ai_tournament_v2_emancipation_smoke.lua`
+- `ai_tournament_latency_smoke.lua`
 - `steam_runtime_smoke.lua`
 - `steam_online_smoke.lua`
 - `steam_elo_smoke.lua`
@@ -86,7 +97,8 @@ Example:
 ```bash
 lua scripts/input_smoke.lua
 lua scripts/ui_consistency_smoke.lua
-lua scripts/ai_regression.lua
+lua scripts/ai_tournament_v2_emancipation_smoke.lua
+lua scripts/ai_tournament_latency_smoke.lua
 ```
 
 ## Key Paths

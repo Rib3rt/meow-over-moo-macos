@@ -152,7 +152,7 @@ return {
         orthogonalDecay = 0.7,    -- Multiplier for each additional orthogonal ring beyond distance 1
         diagonalGradient = 0.3,    -- Bonus applied to diagonal adjacent cells (lighter guidance)
     },
-    COMMANDANT_ATTACK_GRADIENT = 0.6,  -- Legacy support: percentage applied to adjacent tiles around the enemy hub
+    COMMANDANT_ATTACK_GRADIENT = 0.6,  -- Compatibility value applied to adjacent tiles around the enemy hub
 
     -- Commandant defense priority (scaled by pressure)
     COMMANDANT_DEFENSE_PRIORITY = {
@@ -211,7 +211,7 @@ return {
     -- ========================================================================
     
     -- Enable detailed influence map logging
-    DEBUG_ENABLED = true,
+    DEBUG_ENABLED = false,
     
     -- Print full 8x8 influence map grid (very verbose!)
     DEBUG_SHOW_MAP = false,

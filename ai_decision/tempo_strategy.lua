@@ -43,6 +43,22 @@ function M.mixin(aiClass, shared)
     local deepMerge = shared.deepMerge
     local hashPosition = shared.hashPosition
     local buildMovePatternKey = shared.buildMovePatternKey
+
+    local function resolveDrawUrgencyThreshold()
+        local drawContract = RULE_CONTRACT.DRAW or {}
+        local rawThreshold = tonumber(valueOr(drawContract.NO_INTERACTION_LIMIT, GAME.CONSTANTS.MAX_TURNS_WITHOUT_DAMAGE))
+            or (GAME.CONSTANTS.MAX_TURNS_WITHOUT_DAMAGE or ZERO)
+        local counterUnit = tostring(drawContract.COUNTER_UNIT or "")
+
+        -- Draw urgency heuristics were tuned on per-player-turn counters.
+        -- When draw counting is per full turn, map threshold back to player-turn scale.
+        if counterUnit == "full_turn" then
+            return rawThreshold * TWO
+        end
+
+        return rawThreshold
+    end
+
     function aiClass:updateDrawUrgencyState(state)
         local params = (self.AI_PARAMS and self.AI_PARAMS.DRAW_URGENCY) or {}
         if params.ENABLED == false then
@@ -63,7 +79,7 @@ function M.mixin(aiClass, shared)
         local criticalMargin = valueOr(params.CRITICAL_MARGIN, TWO)
 
         local turnsWithoutDamage = state.turnsWithoutDamage or ZERO
-        local drawThreshold = valueOr((RULE_CONTRACT.DRAW or {}).NO_INTERACTION_LIMIT, GAME.CONSTANTS.MAX_TURNS_WITHOUT_DAMAGE)
+        local drawThreshold = resolveDrawUrgencyThreshold()
         local triggerLevel = math.max(ZERO, drawThreshold - triggerMargin)
 
         if not state.currentTurn or state.currentTurn < minTurn then

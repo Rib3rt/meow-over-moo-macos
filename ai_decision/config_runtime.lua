@@ -43,6 +43,86 @@ function M.mixin(aiClass, shared)
     local deepMerge = shared.deepMerge
     local hashPosition = shared.hashPosition
     local buildMovePatternKey = shared.buildMovePatternKey
+    local punishMapModule = nil
+    local punishMapLoadAttempted = false
+
+    local function getPunishMapModule()
+        if punishMapLoadAttempted then
+            return punishMapModule
+        end
+        punishMapLoadAttempted = true
+        local ok, module = pcall(require, "ai_tournament.punish_map")
+        if ok then
+            punishMapModule = module
+        end
+        return punishMapModule
+    end
+
+    local function isCommandantDeadOrRemoved(state, playerId)
+        if not state or not playerId then
+            return false
+        end
+
+        local hubs = state.commandHubs
+        local hub = hubs and hubs[playerId] or nil
+        if hub then
+            return (hub.currentHp or hub.hp or hub.startingHp or MIN_HP) <= ZERO
+        end
+
+        for _, unit in ipairs(state.units or {}) do
+            if unit and unit.player == playerId and unit.name == "Commandant" then
+                return (unit.currentHp or unit.hp or unit.startingHp or MIN_HP) <= ZERO
+            end
+        end
+
+        return hubs ~= nil
+    end
+
+    local function playerEliminatedNoSupply(state, playerId)
+        if not state or not playerId then
+            return false
+        end
+
+        for _, unit in ipairs(state.units or {}) do
+            if unit
+                and unit.player == playerId
+                and unit.name ~= "Commandant"
+                and unit.name ~= "Rock" then
+                return false
+            end
+        end
+
+        return #((state.supply and state.supply[playerId]) or {}) <= ZERO
+    end
+
+    local function isTerminalCommandantState(state, aiPlayer, ai)
+        if not state or not aiPlayer then
+            return false, nil
+        end
+
+        local enemyPlayer = nil
+        if ai and ai.getOpponentPlayer then
+            enemyPlayer = ai:getOpponentPlayer(aiPlayer)
+        elseif PLAYER_INDEX_SUM then
+            enemyPlayer = PLAYER_INDEX_SUM - aiPlayer
+        end
+
+        if isCommandantDeadOrRemoved(state, enemyPlayer) then
+            return true, "terminal_win"
+        end
+        if playerEliminatedNoSupply(state, enemyPlayer) then
+            return true, "terminal_win_elimination"
+        end
+        if isCommandantDeadOrRemoved(state, aiPlayer) then
+            return true, "terminal_loss"
+        end
+        if playerEliminatedNoSupply(state, aiPlayer) then
+            return true, "terminal_loss_elimination"
+        end
+
+        return false, nil
+    end
+
     function aiClass:isUnitEligibleForAction(unit, aiPlayer, usedUnits, opts)
         if not unit or not aiPlayer then
             return false
@@ -371,6 +451,40 @@ function M.mixin(aiClass, shared)
 
     function aiClass:getPerformanceRuleConfig()
         return PERFORMANCE_RULE_CONTRACT or {}
+    end
+
+    function aiClass:getTournamentConfig()
+        local params = self.AI_PARAMS or {}
+        return params.TOURNAMENT_AI or {}
+    end
+
+    function aiClass:isTournamentAiEnabled()
+        return true
+    end
+
+    function aiClass:getTournamentNumber(key, fallback)
+        local cfg = self:getTournamentConfig()
+        local value = cfg and cfg[key]
+        if type(value) == "number" then
+            return value
+        end
+        return fallback
+    end
+
+    function aiClass:getTournamentBudgetMs(key, fallback)
+        local cfg = self:getTournamentConfig()
+        local value = cfg and cfg[key]
+        if type(value) ~= "number" then
+            value = fallback
+        end
+
+        local perf = ((self.AI_PARAMS or {}).RULE_CONTRACT or {}).PERFORMANCE or {}
+        local globalBudget = perf.DECISION_BUDGET_MS
+        if cfg and cfg.RESPECT_GLOBAL_DECISION_BUDGET == true and type(globalBudget) == "number" then
+            value = math.min(value, globalBudget)
+        end
+
+        return value
     end
 
     function aiClass:getRuntimeDiagnostics()
@@ -748,16 +862,75 @@ function M.mixin(aiClass, shared)
             includeAttack = options.includeAttack ~= false,
             includeRepair = options.includeRepair ~= false,
             includeDeploy = options.includeDeploy ~= false,
-            allowFullHpHealerRepairException = allowHealerRepairException
+            allowFullHpHealerRepairException = allowHealerRepairException,
+            avoidMoveAttackExposure = options.avoidMoveAttackExposure == true,
+            avoidFactionAttacks = options.avoidFactionAttacks == true
         })
 
         if #legalEntries == ZERO then
             return skipAction, true, "no_legal_actions"
         end
 
+        local avoidFactionAttacks = options.avoidFactionAttacks == true
+        local hasNonAttackLegalAction = false
+        if avoidFactionAttacks then
+            for _, legalEntry in ipairs(legalEntries) do
+                local legalAction = legalEntry and legalEntry.action or nil
+                if not (legalAction and legalAction.type == "attack") then
+                    hasNonAttackLegalAction = true
+                    break
+                end
+            end
+        end
+
+        if proposedAction
+            and proposedAction.type == "skip"
+            and (options.allowVoluntarySkip == true or proposedAction._aiVoluntarySkip == true) then
+            -- A voluntary hold is only legal when the board has no executable action.
+            -- If any action exists, the mandatory-action contract must replace skip.
+            proposedAction._aiRejectedVoluntarySkipReason = "legal_action_available"
+        end
+
+        local function isZeroDamageFactionAttack(entry)
+            local action = entry and entry.action or nil
+            if not (action and action.type == "attack") then
+                return false
+            end
+
+            local target = entry.target
+            if not target and action.target then
+                target = self:getUnitAtPosition(state, action.target.row, action.target.col)
+            end
+            if not target
+                or (target.player or ZERO) <= ZERO
+                or target.player == aiPlayer then
+                return false
+            end
+
+            local attacker = entry.unit
+            if not attacker and action.unit then
+                attacker = self:getUnitAtPosition(state, action.unit.row, action.unit.col)
+            end
+            if not attacker then
+                return false
+            end
+
+            local damage = self:calculateDamage(attacker, target) or ZERO
+            return damage <= ZERO
+        end
+
+        local proposedRejectedReason = nil
         if proposedAction and proposedAction.type ~= "skip" then
             for _, legalEntry in ipairs(legalEntries) do
                 if legalEntry and legalEntry.action and self:isActionEquivalent(proposedAction, legalEntry.action) then
+                    if avoidFactionAttacks and proposedAction.type == "attack" and hasNonAttackLegalAction then
+                        proposedRejectedReason = "faction_attack_avoided"
+                        break
+                    end
+                    if options.rejectZeroDamageFactionAttacks == true and isZeroDamageFactionAttack(legalEntry) then
+                        proposedRejectedReason = "zero_damage_faction_attack"
+                        break
+                    end
                     return proposedAction, false, "as_selected"
                 end
             end
@@ -770,10 +943,20 @@ function M.mixin(aiClass, shared)
             includeAttack = options.includeAttack ~= false,
             includeRepair = options.includeRepair ~= false,
             includeDeploy = options.includeDeploy ~= false,
-            allowFullHpHealerRepairException = allowHealerRepairException
+            allowFullHpHealerRepairException = allowHealerRepairException,
+            avoidMoveAttackExposure = options.avoidMoveAttackExposure == true,
+            avoidFactionAttacks = options.avoidFactionAttacks == true
         })
+        for _, fallbackEntry in ipairs(fallback or {}) do
+            if fallbackEntry and fallbackEntry.action then
+                if options.rejectZeroDamageFactionAttacks ~= true or not isZeroDamageFactionAttack(fallbackEntry) then
+                    return fallbackEntry.action, true, proposedRejectedReason or "fallback_replacement"
+                end
+            end
+        end
+
         if fallback[ONE] and fallback[ONE].action then
-            return fallback[ONE].action, true, "fallback_replacement"
+            return fallback[ONE].action, true, "zero_damage_only_fallback"
         end
 
         return skipAction, true, "skip_fallback"
@@ -796,6 +979,8 @@ function M.mixin(aiClass, shared)
         local sanitized = {}
         local replacements = ZERO
         local reasonCounts = {}
+        local terminalTruncated = false
+        local terminalReason = nil
 
         for actionIndex = ONE, maxActions do
             local proposed = sequence and sequence[actionIndex] or nil
@@ -805,11 +990,24 @@ function M.mixin(aiClass, shared)
                 includeAttack = true,
                 includeRepair = true,
                 includeDeploy = true,
-                allowFullHpHealerRepairException = allowHealerRepairException
+                allowFullHpHealerRepairException = allowHealerRepairException,
+                rejectZeroDamageFactionAttacks = options.rejectZeroDamageFactionAttacks == true,
+                allowVoluntarySkip = options.allowVoluntarySkip == true,
+                avoidMoveAttackExposure = options.avoidMoveAttackExposure == true,
+                avoidFactionAttacks = options.avoidFactionAttacks == true
             })
 
             sanitized[#sanitized + ONE] = resolved
-            if replaced then
+            local countAsReplacement = replaced == true
+            if countAsReplacement and resolved and resolved.type == "skip" then
+                local proposedType = proposed and proposed.type or nil
+                if reason == "no_legal_actions" and (proposed == nil or proposedType == "skip") then
+                    -- Filling a legally forced skip when no actions exist is not a sanitizer failure.
+                    countAsReplacement = false
+                end
+            end
+
+            if countAsReplacement then
                 replacements = replacements + ONE
                 reasonCounts[reason or "unknown"] = (reasonCounts[reason or "unknown"] or ZERO) + ONE
             end
@@ -821,11 +1019,20 @@ function M.mixin(aiClass, shared)
                     simulatedState = self:applyMove(simulatedState, resolved)
                 end
             end
+
+            local terminal, detectedReason = isTerminalCommandantState(simulatedState, aiPlayer, self)
+            if terminal then
+                terminalTruncated = actionIndex < maxActions
+                terminalReason = detectedReason
+                break
+            end
         end
 
         return sanitized, {
             replacements = replacements,
-            reasonCounts = reasonCounts
+            reasonCounts = reasonCounts,
+            terminalTruncated = terminalTruncated,
+            terminalReason = terminalReason
         }
     end
 
@@ -952,7 +1159,13 @@ function M.mixin(aiClass, shared)
         end
 
         if includeDeploy then
-            local deployments = self:getPossibleSupplyDeployments(state, true) or {}
+            local deployments = nil
+            if self.getPossibleSupplyDeploymentsForPlayer then
+                deployments = self:getPossibleSupplyDeploymentsForPlayer(state, aiPlayer, true)
+            else
+                deployments = self:getPossibleSupplyDeployments(state, true)
+            end
+            deployments = deployments or {}
             for _, deployment in ipairs(deployments) do
                 addAction({
                     type = "supply_deploy",
@@ -973,6 +1186,8 @@ function M.mixin(aiClass, shared)
         local preferDeployOrPosition = valueOr(fallbackDoctrine.PREFER_DEPLOY_OR_POSITION, true)
         local rockPenalty = math.max(ZERO, valueOr(fallbackDoctrine.ROCK_ATTACK_PENALTY, 4000))
         local unsupportedPenalty = math.max(ZERO, valueOr(fallbackDoctrine.UNSUPPORTED_NONLETHAL_PENALTY, 6000))
+        local avoidMoveAttackExposure = options.avoidMoveAttackExposure == true
+        local avoidFactionAttacks = options.avoidFactionAttacks == true
 
         local legalActions = self:collectLegalActions(state, {
             aiPlayer = fallbackAiPlayer,
@@ -998,6 +1213,19 @@ function M.mixin(aiClass, shared)
 
         if #legalActions == ZERO then
             return {}
+        end
+
+        if avoidFactionAttacks then
+            local nonAttackActions = {}
+            for _, entry in ipairs(legalActions) do
+                local action = entry and entry.action or nil
+                if not (action and action.type == "attack") then
+                    nonAttackActions[#nonAttackActions + ONE] = entry
+                end
+            end
+            if #nonAttackActions > ZERO then
+                legalActions = nonAttackActions
+            end
         end
 
         local function evaluateImmediateThreatAtPosition(boardState, targetUnit)
@@ -1143,6 +1371,34 @@ function M.mixin(aiClass, shared)
                     threatPenalty = threatPenalty + (attackerDelta * 150)
                 end
 
+                if avoidMoveAttackExposure then
+                    local punishMap = getPunishMapModule()
+                    local enemyPlayer = self.getOpponentPlayer and self:getOpponentPlayer(fallbackAiPlayer)
+                        or (PLAYER_INDEX_SUM and (PLAYER_INDEX_SUM - fallbackAiPlayer))
+                    local analysis = punishMap
+                        and punishMap.analyzeCell
+                        and enemyPlayer
+                        and punishMap.analyzeCell(state, self, {
+                            aiPlayer = fallbackAiPlayer,
+                            enemyPlayer = enemyPlayer,
+                            phase = {name = "early"}
+                        }, tempUnit, tempUnit)
+                        or nil
+                    local reply = analysis and analysis.enemyBestReply or nil
+                    if reply then
+                        local replyDamage = tonumber(reply.damage) or ZERO
+                        if reply.lethal == true then
+                            threatPenalty = threatPenalty + 9000 + (replyDamage * 450)
+                        elseif replyDamage > ZERO then
+                            threatPenalty = threatPenalty + 1800 + (replyDamage * 220)
+                        end
+                        local tradeNet = tonumber(analysis.tradeNet) or ZERO
+                        if tradeNet < ZERO then
+                            threatPenalty = threatPenalty + (math.abs(tradeNet) * 320)
+                        end
+                    end
+                end
+
                 score = score - threatPenalty
                 return score
             elseif entry.type == "supply_deploy" then
@@ -1160,24 +1416,86 @@ function M.mixin(aiClass, shared)
         return legalActions
     end
 
-    function aiClass:simulateActionSequence(state, sequence)
+    function aiClass:prepareStateForPlayerTurn(state, playerId, opts)
+        local options = opts or {}
+        if not state or not playerId then
+            return state
+        end
+
+        local prepared = self:deepCopyState(state)
+
+        if options.resetActionCount ~= false then
+            prepared.turnActionCount = ZERO
+        end
+        if options.resetDeployment ~= false then
+            prepared.hasDeployedThisTurn = false
+        end
+        if options.resetFirstActionRangedAttack ~= false then
+            prepared.firstActionRangedAttack = nil
+        end
+
+        for _, unit in ipairs(prepared.units or {}) do
+            if unit
+                and unit.player == playerId
+                and not self:isHubUnit(unit)
+                and not self:isObstacleUnit(unit) then
+                unit.hasActed = false
+                unit.hasMoved = false
+                unit.actionsUsed = ZERO
+            end
+        end
+
+        return prepared
+    end
+
+    function aiClass:simulateActionSequenceForPlayer(state, sequence, playerId, opts)
         if not state then
             return nil
         end
 
+        local options = opts or {}
         local simulatedState = self:deepCopyState(state)
         simulatedState.turnActionCount = simulatedState.turnActionCount or ZERO
         simulatedState.firstActionRangedAttack = simulatedState.firstActionRangedAttack
 
         for _, action in ipairs(sequence or {}) do
             if action and action.type == "supply_deploy" then
-                simulatedState = self:applySupplyDeployment(simulatedState, action)
+                local deployPlayer = playerId
+                if not deployPlayer and options.inferPlayerFromAction ~= false then
+                    deployPlayer = action.playerId
+                end
+                if not deployPlayer then
+                    deployPlayer = self:getFactionId()
+                end
+                simulatedState = self:applySupplyDeploymentForPlayer(simulatedState, action, deployPlayer, options)
             elseif action and action.type ~= "skip" then
                 simulatedState = self:applyMove(simulatedState, action)
             end
         end
 
         return simulatedState
+    end
+
+    function aiClass:simulateActionSequence(state, sequence)
+        return self:simulateActionSequenceForPlayer(state, sequence, self:getFactionId())
+    end
+
+    local tournamentThreatModel = nil
+    local function getTournamentThreatModel()
+        if not tournamentThreatModel then
+            tournamentThreatModel = require("ai_tournament.threat_model")
+        end
+        return tournamentThreatModel
+    end
+
+    function aiClass:analyzeHubThreatForPlayer(state, playerToProtect, attackerPlayer, opts)
+        local threatModel = getTournamentThreatModel()
+        return threatModel.analyzeHubThreatForPlayer(self, state, playerToProtect, attackerPlayer, opts)
+    end
+
+    function aiClass:hasImmediateCommandantLethal(state, attackerPlayer, defenderPlayer, opts)
+        local threatModel = getTournamentThreatModel()
+        return threatModel.hasImmediateCommandantLethal(self, state, attackerPlayer, defenderPlayer, opts)
     end
 
     function aiClass:getPlanProgressDistanceForState(state, aiPlayer)

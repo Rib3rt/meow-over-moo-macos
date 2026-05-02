@@ -87,15 +87,36 @@ function aiState.getStateFromGrid(self)
         end
     end
 
-    -- Get Rocks from gameRuler
+    -- Get Rocks from gameRuler. The game ruler keeps a placement list, while
+    -- the grid owns the live unit table; trust the live grid/HP so destroyed
+    -- Rocks do not reappear as AI targets.
     if self.gameRuler and self.gameRuler.neutralBuildings then
         for _, building in ipairs(self.gameRuler.neutralBuildings) do
-            table.insert(state.neutralBuildings, {
-                row = building.row,
-                col = building.col,
-                currentHp = building.currentHp,
-                startingHp = building.startingHp or building.maxHp
-            })
+            local row = building and building.row
+            local col = building and building.col
+            local hasGridLookup = self.grid and self.grid.getUnitAt
+            local gridUnit = row and col and hasGridLookup and self.grid:getUnitAt(row, col) or nil
+
+            local source = nil
+            if hasGridLookup then
+                if gridUnit and (gridUnit.name == "Rock" or tonumber(gridUnit.player) == ZERO) then
+                    source = gridUnit
+                end
+            else
+                source = building.building or building
+            end
+
+            local currentHp = valueOr(source and source.currentHp, building and building.currentHp)
+            local startingHp = valueOr(source and source.startingHp, valueOr(source and source.maxHp, valueOr(building and building.startingHp, building and building.maxHp)))
+
+            if row and col and currentHp and currentHp > ZERO then
+                table.insert(state.neutralBuildings, {
+                    row = row,
+                    col = col,
+                    currentHp = currentHp,
+                    startingHp = valueOr(startingHp, currentHp)
+                })
+            end
         end
     end
 

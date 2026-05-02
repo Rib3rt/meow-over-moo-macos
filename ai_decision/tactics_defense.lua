@@ -2333,8 +2333,9 @@ function M.mixin(aiClass, shared)
         local unitRow = unit.row
         local unitCol = unit.col
 
-        -- Track debug output when evaluating low-HP corvette units.
-        local isDebugUnit = (self:unitHasTag(unit, "corvette") and (unit.currentHp or unit.hp or ZERO) <= TWO)
+        -- Keep this opt-in: threat checks are called inside hot safety loops.
+        local isDebugUnit = DEBUG and DEBUG.AI_THREAT_CHECKS == true
+            and (self:unitHasTag(unit, "corvette") and (unit.currentHp or unit.hp or ZERO) <= TWO)
 
         -- Gather all possible enemy threats, categorized by action cost
         for _, enemy in ipairs(state.units) do
@@ -2348,7 +2349,7 @@ function M.mixin(aiClass, shared)
                     local hasLOS = self:hasLineOfSightIgnoringUnit(state, enemy, unit, unit)
                     if distance >= TWO and distance <= THREE and hasLOS then
                         immediateDamage = math.max(immediateDamage, getDamage(enemy, unit))
-                        if isDebugUnit and DEBUG and DEBUG.AI then
+                        if isDebugUnit then
                             print(string.format("  THREAT CHECK: Enemy %s @ (%d,%d) can DIRECTLY attack (%d,%d) - dist=%d, dmg=%d",
                                 enemy.name, enemy.row, enemy.col, unitRow, unitCol, distance, immediateDamage))
                         end

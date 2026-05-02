@@ -1,4 +1,4 @@
-# Production Readiness Checklist - 2026-03-07
+# Production Readiness Checklist - Updated 2026-05-02
 
 ## Current assessment
 - Core gameplay loop: ready
@@ -8,7 +8,8 @@
 - Steam online gameplay/lobby/invite flow: ready
 - Steam Deck control path: ready
 - Packaging workflow: ready
-- Public production release: ready (stable baseline)
+- AI runtime: release candidate
+- Public production release: ready for RC validation
 
 ## Release blockers
 - None.
@@ -26,21 +27,20 @@
 
 ## Repo leftovers found during scan
 ### Generated runtime artifacts
-- `DebugConsole.log`
-- `SteamRuntimeError.log`
+- `DebugConsole.log` is disabled by default for RC.
+- `SteamRuntimeError.log` is treated as a local runtime artifact.
 
 ### Generated perf artifacts
 - `docs/perf_last_session.csv`
 - `docs/perf_last_session_summary.txt`
 
 ### Intentional diagnostics still present in runtime code
-- `audio_runtime.lua`
-- `steam_runtime.lua`
-- `stateMachine.lua`
-- `factionSelect.lua`
+- Steam/audio/runtime diagnostics remain in source but are not verbose by default.
+- AI tournament diagnostics are off unless explicitly enabled by environment/config.
 
 These are not packaged as gameplay content by the current release-file collector, but they are still part of the source tree and should be reviewed before a final release freeze.
 
 ## Release status note
-1. The current non-puzzle release baseline is stable.
-2. There are no open TODO items in the release checklist at this time.
+1. The current baseline is a 2026-05-02 release candidate.
+2. Tournament V2 is the canonical AI runtime.
+3. There are no open TODO items in the release checklist at this time.

@@ -80,6 +80,15 @@ function M.init(opts)
     end
 
     opts = opts or {}
+    local perfSettings = SETTINGS and SETTINGS.PERF or {}
+    local enabled = opts.enabled
+    if enabled == nil then
+        enabled = perfSettings.DEBUG_CONSOLE_LOG_ENABLED == true
+    end
+    if enabled ~= true then
+        return false
+    end
+
     virtualPath = tostring(opts.fileName or DEFAULT_FILE_NAME)
     resolvedPath = virtualPath
 

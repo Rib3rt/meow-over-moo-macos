@@ -101,11 +101,43 @@ local function resolveShadowUnitName(unit)
 end
 
 function playGridClass:hasActiveAnimations()
-    if not self.movingUnits then
-        return false
+    if self.movingUnits and #self.movingUnits > 0 then
+        return true
     end
 
-    return #self.movingUnits > 0
+    if self.spawnBeams and #self.spawnBeams > 0 then
+        return true
+    end
+
+    if self.activeEffects and #self.activeEffects > 0 then
+        return true
+    end
+
+    if self.rangedAttackEffects and #self.rangedAttackEffects > 0 then
+        return true
+    end
+
+    if self.commandHubZoomEffects and #self.commandHubZoomEffects > 0 then
+        return true
+    end
+
+    if self.commandHubScanEffects and #self.commandHubScanEffects > 0 then
+        return true
+    end
+
+    if self.destructionEffects and #self.destructionEffects > 0 then
+        return true
+    end
+
+    if self.teslaStrikeEffects and #self.teslaStrikeEffects > 0 then
+        return true
+    end
+
+    if self.impactEffects and #self.impactEffects > 0 then
+        return true
+    end
+
+    return false
 end
 
 -- Helper function to play preview indicator sound
@@ -2852,10 +2884,27 @@ function playGridClass:update(dt)
 
     self:updateTeslaStrikeEffects(dt, now)
 
+    self:updateRangedAttackEffects(dt, now)
+
     self:updateAIDecisionEffects(dt, now)
 
     self:_cacheForcedPreviewCells()
 
+end
+
+function playGridClass:updateRangedAttackEffects(dt, now)
+    local _ = dt
+    if not self.rangedAttackEffects then return end
+
+    local currentTime = now or love.timer.getTime()
+    for i = #self.rangedAttackEffects, 1, -1 do
+        local effect = self.rangedAttackEffects[i]
+        local elapsed = currentTime - (effect.startTime or currentTime)
+        if elapsed >= (effect.duration or 0) then
+            self:recycleRangedAttackEffect(effect)
+            table.remove(self.rangedAttackEffects, i)
+        end
+    end
 end
 
 function playGridClass:_cacheForcedPreviewCells()

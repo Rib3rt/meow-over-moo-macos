@@ -43,6 +43,26 @@ local UNIFIED_BASE_PROFILE = "base"
 local UNIFIED_BASE_PROFILE_TYPE = "fixed"
 local DEFAULT_PROFILE_REFERENCE = profileConfig.DEFAULT_REFERENCE or UNIFIED_BASE_PROFILE
 local BURNS_ALIAS_REFERENCE = "burns"
+local ANIMATION_WAIT_LOG_AFTER_SECONDS = 1.0
+local CRITICAL_ANIMATION_BUCKETS = {
+    movingUnits = true,
+    spawnBeams = true,
+    rangedAttackEffects = true,
+    destructionEffects = true,
+    teslaStrikeEffects = true,
+    impactEffects = true
+}
+local ANIMATION_BUCKET_ORDER = {
+    "movingUnits",
+    "spawnBeams",
+    "rangedAttackEffects",
+    "destructionEffects",
+    "teslaStrikeEffects",
+    "impactEffects",
+    "activeEffects",
+    "commandHubZoomEffects",
+    "commandHubScanEffects"
+}
 
 local debugMixin = require('ai_debug')
 local profileMixin = require('ai_profile')
@@ -58,22 +78,124 @@ profileMixin.mixin(aiClass)
 mobilityMixin.mixin(aiClass)
 decisionMixin.mixin(aiClass)
 
-function aiClass:scheduleAfterAnimations(delay, callback)
+local function bucketCount(grid, bucketName)
+    local bucket = grid and grid[bucketName]
+    if type(bucket) ~= "table" then
+        return ZERO
+    end
+    return #bucket
+end
+
+local function formatSchedulerTraceContext(options)
+    local context = options and options.traceContext or {}
+    return string.format(
+        "player=%s turn=%s phase=%s actionIndex=%s next=%s",
+        tostring(context.player or "?"),
+        tostring(context.turn or "?"),
+        tostring(context.phase or "?"),
+        tostring(context.actionIndex or "?"),
+        tostring(context.nextIndex or "?")
+    )
+end
+
+function aiClass:getAnimationWaitState()
+    local grid = (self.gameRuler and self.gameRuler.currentGrid) or self.grid
+    local totalCount = ZERO
+    local criticalCount = ZERO
+    local summary = {}
+
+    for _, bucketName in ipairs(ANIMATION_BUCKET_ORDER) do
+        local count = bucketCount(grid, bucketName)
+        if count > ZERO then
+            totalCount = totalCount + count
+            if CRITICAL_ANIMATION_BUCKETS[bucketName] then
+                criticalCount = criticalCount + count
+            end
+            table.insert(summary, string.format("%s=%d", bucketName, count))
+        end
+    end
+
+    return {
+        active = totalCount > ZERO,
+        critical = criticalCount,
+        passive = totalCount - criticalCount,
+        summary = (#summary > ZERO) and table.concat(summary, ",") or "none"
+    }
+end
+
+function aiClass:scheduleAfterAnimations(delay, callback, options)
     if not callback then
         return
     end
 
     delay = delay or DEFAULT_DELAY
+    options = options or {}
 
     if not self.gameRuler or not self.gameRuler.scheduleAction then
         callback()
         return
     end
 
+    local waitStartedAt = love and love.timer and love.timer.getTime and love.timer.getTime() or nil
+    local waitLogged = false
+    local traceTag = options.traceTag
+
     local function waitForAnimations()
-        if self.gameRuler.hasActiveAnimations and self.gameRuler:hasActiveAnimations() then
+        local hasActiveAnimations = self.gameRuler.hasActiveAnimations and self.gameRuler:hasActiveAnimations()
+        local waitState = nil
+
+        if traceTag or options.allowPassiveAnimationBypass then
+            waitState = self:getAnimationWaitState()
+            if waitState.active then
+                hasActiveAnimations = true
+            end
+        end
+
+        if options.allowPassiveAnimationBypass and waitState and waitState.active and waitState.critical == ZERO then
+            if traceTag then
+                logger.warn(
+                    "AI",
+                    string.format(
+                        "AI_ANIM_WAIT_BYPASS tag=%s %s blockers=%s",
+                        tostring(traceTag),
+                        formatSchedulerTraceContext(options),
+                        tostring(waitState.summary)
+                    )
+                )
+            end
+            self.gameRuler:scheduleAction(delay, callback)
+        elseif hasActiveAnimations then
+            if traceTag and not waitLogged and waitStartedAt then
+                local elapsed = love.timer.getTime() - waitStartedAt
+                if elapsed >= ANIMATION_WAIT_LOG_AFTER_SECONDS then
+                    waitLogged = true
+                    waitState = waitState or self:getAnimationWaitState()
+                    logger.warn(
+                        "AI",
+                        string.format(
+                            "AI_ANIM_WAIT tag=%s %s elapsed=%.2f blockers=%s critical=%d passive=%d",
+                            tostring(traceTag),
+                            formatSchedulerTraceContext(options),
+                            elapsed,
+                            tostring(waitState.summary),
+                            tonumber(waitState.critical) or ZERO,
+                            tonumber(waitState.passive) or ZERO
+                        )
+                    )
+                end
+            end
             self.gameRuler:scheduleAction(POLL_INTERVAL, waitForAnimations)
         else
+            if traceTag and waitLogged then
+                logger.warn(
+                    "AI",
+                    string.format(
+                        "AI_ANIM_WAIT_CLEAR tag=%s %s",
+                        tostring(traceTag),
+                        formatSchedulerTraceContext(options)
+                    )
+                )
+            end
             self.gameRuler:scheduleAction(delay, callback)
         end
     end
@@ -456,6 +578,12 @@ function aiClass:selectBurnsReference(state, factionId, opts)
 end
 
 function aiClass:getEffectiveAiReference(state, opts)
+    local tournamentEnabled = self.isTournamentAiEnabled and self:isTournamentAiEnabled()
+    local tournamentCfg = self.getTournamentConfig and self:getTournamentConfig() or {}
+    if tournamentEnabled and tournamentCfg.IGNORE_PROFILE_OVERRIDES == true then
+        return UNIFIED_BASE_PROFILE
+    end
+
     local options = opts or {}
     local identity = tostring(self.aiReference or DEFAULT_PROFILE_REFERENCE)
     if identity ~= BURNS_ALIAS_REFERENCE then

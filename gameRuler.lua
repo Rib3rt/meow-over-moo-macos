@@ -18,6 +18,8 @@ local INITIAL_DEPLOY_RULES = SETUP_RULES.INITIAL_DEPLOY or {}
 local TURN_RULES = RULE_CONTRACT.TURN or {}
 local ACTION_RULES = RULE_CONTRACT.ACTIONS or {}
 local DRAW_RULES = RULE_CONTRACT.DRAW or {}
+local SCHEDULER_RULES = AI_PARAMS.SCHEDULER or {}
+local ANIMATION_POLL_INTERVAL = tonumber(SCHEDULER_RULES.ANIMATION_POLL_INTERVAL) or 0.05
 local DEFAULT_LAST_GAME_LOG_PATH = "LastGameLog.txt"
 local DRAW_AT_TURN_PROTECTION_TOKEN = "__LAST_GAME_LOG_DRAW_TOKEN__"
 
@@ -1079,10 +1081,12 @@ function gameRuler:executeCommandHubDefense()
 
     -- **FIX: Wait for all animations to complete before starting Commandant defense**
     local function waitForAnimationsAndExecute()
-        -- Check if there are any moving units or animations still running
-        if self.currentGrid and self.currentGrid.movingUnits and #self.currentGrid.movingUnits > 0 then
+        -- Check if there are any moving units or visual spawn/attack animations still running.
+        if self.currentGrid
+            and self.currentGrid.hasActiveAnimations
+            and self.currentGrid:hasActiveAnimations() then
             -- Wait a bit longer and check again
-            self:scheduleAction(0.3, waitForAnimationsAndExecute)
+            self:scheduleAction(ANIMATION_POLL_INTERVAL, waitForAnimationsAndExecute)
             return
         end
         
@@ -1203,7 +1207,9 @@ function gameRuler:executeCommandHubDefenseInternal()
             if targetUnit and targetUnit.player ~= currentPlayer and targetUnit.player ~= 0 then
 
                 -- Any Commandant attack is interaction for draw-counter purposes.
-                if DRAW_RULES.RESET_ON_COMMANDANT_ATTACK ~= false then
+                if DRAW_RULES.RESET_ON_COMMANDANT_ATTACK ~= false
+                    and self:isFactionInteractionAttack(self.currentPlayer, targetUnit.player)
+                then
                     self:resetNoInteractionCounter("commandant_attack")
                 end
 
@@ -1730,6 +1736,7 @@ function gameRuler:resetNoInteractionCounter(reason)
     self.turnsWithoutDamage = 0
     self.turnHadInteraction = true
     self.onlineDrawOfferPending = false
+    self._lastNoInteractionResetReason = reason
     return self.turnsWithoutDamage
 end
 
@@ -1741,9 +1748,57 @@ function gameRuler:consumeOnlineDrawOfferPending()
     return false
 end
 
-function gameRuler:incrementNoInteractionCounterPerPlayerTurn()
-    local startTurn = DRAW_RULES.START_TURN or 10
-    if (self.currentTurn or 0) >= startTurn then
+function gameRuler:isFactionInteractionAttack(attackerPlayer, targetPlayer)
+    local attacker = tonumber(attackerPlayer) or 0
+    local target = tonumber(targetPlayer) or 0
+    local neutralCountsAsInteraction = DRAW_RULES.NEUTRAL_ATTACKS_COUNT_AS_INTERACTION == true
+
+    if attacker <= 0 or attacker == target then
+        return false
+    end
+
+    if target <= 0 then
+        return neutralCountsAsInteraction
+    end
+
+    return true
+end
+
+function gameRuler:syncNeutralBuildingState(row, col, unit)
+    if not self.neutralBuildings or not row or not col then
+        return false
+    end
+
+    local currentHp = tonumber(unit and unit.currentHp)
+    local startingHp = tonumber(unit and (unit.startingHp or unit.maxHp))
+    local removed = false
+
+    for i = #self.neutralBuildings, 1, -1 do
+        local building = self.neutralBuildings[i]
+        if building and building.row == row and building.col == col then
+            if currentHp and currentHp <= 0 then
+                table.remove(self.neutralBuildings, i)
+                removed = true
+            else
+                building.currentHp = currentHp or building.currentHp
+                building.startingHp = startingHp or building.startingHp
+                if building.building then
+                    building.building.currentHp = building.currentHp or building.building.currentHp
+                    building.building.startingHp = building.startingHp or building.building.startingHp
+                end
+            end
+        end
+    end
+
+    return removed
+end
+
+function gameRuler:incrementNoInteractionCounterPerFullTurn(completedFullTurn)
+    local startTurn = tonumber(DRAW_RULES.COUNT_FROM_FULL_TURN)
+        or tonumber(DRAW_RULES.START_TURN)
+        or 11
+    local evaluatedTurn = tonumber(completedFullTurn) or tonumber(self.currentTurn) or 0
+    if evaluatedTurn >= startTurn then
         if self.turnHadInteraction then
             self.turnsWithoutDamage = 0
         else
@@ -1753,9 +1808,14 @@ function gameRuler:incrementNoInteractionCounterPerPlayerTurn()
     return self.turnsWithoutDamage or 0
 end
 
-function gameRuler:checkDrawConditions()
-    -- Increment once per player turn.
-    self:incrementNoInteractionCounterPerPlayerTurn()
+-- Legacy alias kept for compatibility with regression harnesses.
+function gameRuler:incrementNoInteractionCounterPerPlayerTurn(completedFullTurn)
+    return self:incrementNoInteractionCounterPerFullTurn(completedFullTurn)
+end
+
+function gameRuler:checkDrawConditions(completedFullTurn)
+    local evaluatedTurn = tonumber(completedFullTurn) or tonumber(self.currentTurn) or 0
+    self:incrementNoInteractionCounterPerFullTurn(evaluatedTurn)
     local drawLimit = DRAW_RULES.NO_INTERACTION_LIMIT or GAME.CONSTANTS.MAX_TURNS_WITHOUT_DAMAGE
     local earlyOfferTurn = math.floor(drawLimit / 2)
 
@@ -1768,7 +1828,7 @@ function gameRuler:checkDrawConditions()
                 "STALEMATE DETECTED\n\nDraw the game now?",
                 function()
                     -- Confirmed - end in draw now
-                    self:addLogEntryString("GAME DRAW AT TURN " .. self.currentTurn)
+                    self:addLogEntryString("GAME DRAW AT TURN " .. tostring(evaluatedTurn))
                     self.winner = 0
                     self.lastVictoryReason = "draw"
                     self.drawGame = true
@@ -1787,8 +1847,8 @@ function gameRuler:checkDrawConditions()
     -- Check for draw condition
     if self.turnsWithoutDamage >= drawLimit then
         -- Log the draw
-        self:addLogEntryString(tostring(drawLimit) .. " no fight turns")
-        self:addLogEntryString("GAME DRAW AT TURN " .. self.currentTurn)
+        self:addLogEntryString(tostring(drawLimit) .. " no faction fight full turns")
+        self:addLogEntryString("GAME DRAW AT TURN " .. tostring(evaluatedTurn))
 
         self.winner = 0
         self.lastVictoryReason = "draw"
@@ -1840,9 +1900,9 @@ function gameRuler:nextTurn()
     -- Reset damage flags for the current player's units before switching turns
     self:resetDamageFlags(self.currentPlayer)
 
-    -- Draw counter is evaluated once per player turn.
+    -- Draw counter is evaluated once per completed full turn (end of Red turn).
     if not self:isScenarioMode() then
-        if self:checkDrawConditions() then
+        if self.currentPlayer == 2 and self:checkDrawConditions(self.currentTurn) then
             return true
         end
     end
@@ -1888,7 +1948,10 @@ end
 
 function gameRuler:finalizeTurnTransition()
     self.currentTurnPhase = TURN_PHASES.COMMAND_HUB
-    self.turnHadInteraction = false
+    if self.currentPlayer == 1 then
+        -- Reset only at the beginning of a new full turn.
+        self.turnHadInteraction = false
+    end
 
     -- Commandant should attack at the START of every player's turn
     self:scheduleAction(0.1, function()
@@ -1908,6 +1971,7 @@ function gameRuler:finalizeTurnTransition()
                 local unit = self.currentGrid:getUnitAt(row, col)
                 if unit then
                     unit.hasActed = false
+                    unit.hasMoved = false
                     unit.turnActions = {}
                     unit.actionsUsed = 0
                 end
@@ -3470,7 +3534,9 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
         end
     end
 
-    if DRAW_RULES.RESET_ON_ANY_ATTACK ~= false then
+    if DRAW_RULES.RESET_ON_ANY_ATTACK ~= false
+        and self:isFactionInteractionAttack(self.currentPlayer, targetUnit.player)
+    then
         self:resetNoInteractionCounter("unit_attack")
     end
 
@@ -3503,6 +3569,9 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
         
         -- Apply damage to target
         targetUnit.currentHp = targetUnit.currentHp - attackingDamage
+        if (tonumber(targetUnit.player) or 0) == 0 and targetUnit.name == "Rock" then
+            self:syncNeutralBuildingState(targetRow, targetCol, targetUnit)
+        end
 
         -- Update damage stats
         self.gameStats.players[self.currentPlayer].damageDealt = self.gameStats.players[self.currentPlayer].damageDealt + attackingDamage
@@ -3763,6 +3832,9 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
 
                 -- Apply damage when beam animation would be mostly complete
                 impactTarget.currentHp = impactTarget.currentHp - damage
+                if (tonumber(impactTarget.player) or 0) == 0 and impactTarget.name == "Rock" then
+                    self:syncNeutralBuildingState(targetRow, targetCol, impactTarget)
+                end
 
                 -- Update damage stats
                 self.gameStats.players[self.currentPlayer].damageDealt = self.gameStats.players[self.currentPlayer].damageDealt + damage
@@ -3945,6 +4017,9 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                 end
                 
                 impactTarget.currentHp = impactTarget.currentHp - damage
+                if (tonumber(impactTarget.player) or 0) == 0 and impactTarget.name == "Rock" then
+                    self:syncNeutralBuildingState(targetRow, targetCol, impactTarget)
+                end
                 
                 -- Set Artillery damage flag for AI reactive flow (same as Corvette flag)
                 if impactTarget.currentHp > 0 then  -- Only set flag if unit survives
@@ -4512,7 +4587,9 @@ function gameRuler:placeNeutralBuilding(row, col)
     table.insert(self.neutralBuildings, {
         building = neutralBuilding,
         row = row,
-        col = col
+        col = col,
+        currentHp = neutralBuilding.currentHp,
+        startingHp = neutralBuilding.startingHp or neutralBuilding.maxHp
     })
 
     -- Add to turnlog
@@ -4637,6 +4714,10 @@ function gameRuler:recordUnitAction(row, col, actionType)
     unit.turnActions[actionType] = true
 
     unit.actionsUsed = (unit.actionsUsed or 0) + 1
+
+    if actionType == "move" then
+        unit.hasMoved = true
+    end
 
     -- Mark unit as acted if it was attack or repair
     if actionType == "attack" or actionType == "repair" then
@@ -4899,11 +4980,11 @@ end
 function gameRuler:isAnimationInProgress()
     -- Check if grid has active animations
     if self.currentGrid then
-        if self.currentGrid.movingUnits and #self.currentGrid.movingUnits > 0 then
+        if self.currentGrid.hasActiveAnimations and self.currentGrid:hasActiveAnimations() then
             return true
         end
 
-        -- Check for attack/beam effects
+        -- Check for legacy active effects not covered by the grid animation helper.
         if self.currentGrid.activeEffects and #self.currentGrid.activeEffects > 0 then
             return true
         end

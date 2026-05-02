@@ -1,11 +1,4 @@
--- Keep LuaJIT in interpreter mode on Apple Silicon until the native macOS
--- runtime has full parity with the shipping Windows/Linux builds.
-if love and love.system and love.system.getOS and jit and (jit.arch == 'arm64' or jit.arch == 'arm') then
-    local okOs, osName = pcall(love.system.getOS)
-    if okOs and (osName == "OS X" or osName == "macOS") then
-        jit.off()
-    end
-end
+--if (love.system.getOS() == 'OS X' ) and (jit.arch == 'arm64' or jit.arch == 'arm') then jit.off() end
 
 require("globals")
 
@@ -16,7 +9,11 @@ local audioRuntime = require("audio_runtime")
 local achievementRuntime = require("achievement_runtime")
 
 function love.load()
-    debugConsoleLog.init()
+    debugConsoleLog.init({
+        enabled = SETTINGS
+            and SETTINGS.PERF
+            and SETTINGS.PERF.DEBUG_CONSOLE_LOG_ENABLED == true
+    })
     audioRuntime.init()
     achievementRuntime.init()
     steamRuntime.init()
