@@ -28,6 +28,15 @@ local state = {
     remotePlayMatchReason = nil,
     remotePlayMatchFirstPlaybackAt = nil,
     remotePlayMatchFirstPlaybackPath = nil,
+    music = {
+        id = nil,
+        path = nil,
+        source = nil,
+        currentVolume = 0,
+        targetVolume = 0,
+        ducked = false,
+        duckReason = nil
+    }
 }
 
 local function nowSeconds()
@@ -44,7 +53,53 @@ local function audioConfig()
         sfxVolume = tonumber(audio.SFX_VOLUME) or 0,
         musicEnabled = audio.MUSIC ~= false,
         musicVolume = tonumber(audio.MUSIC_VOLUME) or 0,
+        gameplayMusicMultiplier = tonumber(audio.GAMEPLAY_MUSIC_MULTIPLIER) or 0.65,
+        musicDuckMultiplier = tonumber(audio.MUSIC_DUCK_MULTIPLIER) or 0.35,
+        musicFadeInSec = tonumber(audio.MUSIC_FADE_IN_SEC) or 1.8,
+        musicFadeSec = tonumber(audio.MUSIC_FADE_SEC) or 0.45,
     }
+end
+
+local function clamp01(value)
+    value = tonumber(value) or 0
+    if value < 0 then return 0 end
+    if value > 1 then return 1 end
+    return value
+end
+
+local function computeMusicTargetVolume()
+    local cfg = audioConfig()
+    if not cfg.musicEnabled then
+        return 0
+    end
+
+    local volume = clamp01(cfg.musicVolume)
+    if state.music.id == "gameplay" then
+        volume = volume * clamp01(cfg.gameplayMusicMultiplier)
+    end
+    if state.music.ducked then
+        volume = volume * clamp01(cfg.musicDuckMultiplier)
+    end
+    return clamp01(volume)
+end
+
+local function setSourceVolume(source, volume)
+    if source and type(source.setVolume) == "function" then
+        pcall(source.setVolume, source, clamp01(volume))
+    end
+end
+
+local function stopSource(source)
+    if source and type(source.stop) == "function" then
+        pcall(source.stop, source)
+    end
+end
+
+local function playSource(source)
+    if source and type(source.play) == "function" then
+        return pcall(source.play, source) == true
+    end
+    return false
 end
 
 local function shouldLogAudioDebug()
@@ -93,6 +148,89 @@ end
 function audioRuntime.init()
     state.initialized = true
     sampleActiveSourceCount("init")
+end
+
+function audioRuntime.playMusic(id, path, opts)
+    opts = opts or {}
+    local musicId = tostring(id or path or "")
+    local musicPath = tostring(path or "")
+    if musicId == "" or musicPath == "" then
+        return false
+    end
+
+    if state.music.id == musicId and state.music.path == musicPath and state.music.source then
+        state.music.targetVolume = computeMusicTargetVolume()
+        return true
+    end
+
+    stopSource(state.music.source)
+
+    local ok, source = pcall(love.audio.newSource, musicPath, "stream")
+    if not ok or not source then
+        state.music.id = nil
+        state.music.path = nil
+        state.music.source = nil
+        state.music.currentVolume = 0
+        state.music.targetVolume = 0
+        return false
+    end
+
+    if type(source.setLooping) == "function" then
+        pcall(source.setLooping, source, opts.loop ~= false)
+    end
+    if type(source.seek) == "function" then
+        pcall(source.seek, source, 0)
+    end
+
+    state.music.id = musicId
+    state.music.path = musicPath
+    state.music.source = source
+    state.music.currentVolume = 0
+    state.music.targetVolume = computeMusicTargetVolume()
+    setSourceVolume(source, 0)
+
+    local played = playSource(source)
+    if played then
+        audioRuntime.notePlayback(musicPath, {category = "music"})
+    end
+    return played
+end
+
+function audioRuntime.playMenuMusic()
+    return audioRuntime.playMusic("menu", "assets/audio/MenuTheme.mp3", {loop = true})
+end
+
+function audioRuntime.playGameplayMusic()
+    return audioRuntime.playMusic("gameplay", "assets/audio/GameplayTheme.mp3", {loop = true})
+end
+
+function audioRuntime.setMusicDucked(ducked, reason)
+    local normalized = ducked == true
+    if state.music.ducked ~= normalized or state.music.duckReason ~= reason then
+        state.music.ducked = normalized
+        state.music.duckReason = normalized and tostring(reason or "ducked") or nil
+    end
+    state.music.targetVolume = computeMusicTargetVolume()
+    return state.music.targetVolume
+end
+
+function audioRuntime.update(dt)
+    local music = state.music
+    if not music.source then
+        return
+    end
+
+    music.targetVolume = computeMusicTargetVolume()
+    local cfg = audioConfig()
+    local fadeSec = music.currentVolume <= 0.001 and cfg.musicFadeInSec or cfg.musicFadeSec
+    fadeSec = math.max(0.01, tonumber(fadeSec) or 0.45)
+    local step = math.min(1, math.max(0, tonumber(dt) or 0) / fadeSec)
+    music.currentVolume = music.currentVolume + ((music.targetVolume or 0) - (music.currentVolume or 0)) * step
+
+    if math.abs((music.currentVolume or 0) - (music.targetVolume or 0)) < 0.001 then
+        music.currentVolume = music.targetVolume
+    end
+    setSourceVolume(music.source, music.currentVolume)
 end
 
 function audioRuntime.onFocusChanged(focused)

@@ -7,7 +7,6 @@ local os = require("os")
 local PlayGridClass = require("playGridClass")
 local uiClass = require("uiClass")
 local GameRulerClass = require("gameRuler")
-local AiClass = require("ai")
 local ConfirmDialog = require("confirmDialog")
 local GameLogViewer = require("gameLogViewer")
 local steamRuntime = require("steam_runtime")
@@ -88,7 +87,22 @@ local onlineAutoAdvanceState = {
     matchObjectiveHoveredButton = nil,
     singleCandidateKey = nil,
     singleCandidateSince = nil,
-    singleIssuedKey = nil
+    singleIssuedKey = nil,
+    scenarioRedCandidateKey = nil,
+    scenarioRedCandidateSince = nil,
+    scenarioRedPendingKey = nil,
+    scenarioRedPendingCommand = nil,
+    scenarioRedPendingPolicyRecord = nil,
+    scenarioRedPendingStateKey = nil,
+    scenarioRedPendingSince = nil,
+    scenarioRedLastFailedStateKey = nil,
+    -- HARD GUARDRAIL:
+    -- Scenario generation must not modify runtime movement, phase, preview, or
+    -- timing behavior. Keep generator work in scenario_tooling.
+    -- Red-turn presentation and Commandant Defense already happen before actions.
+    -- Do not add an extra silent delay before the shipped Scenario Red Policy acts.
+    scenarioRedVisibleDelaySec = 0,
+    scenarioRedPreviewDelaySec = 0.35
 }
 -- Don't initialize with default value, always use GAME.CURRENT values
 -- AI always plays optimally - no difficulty levels
@@ -168,6 +182,16 @@ end
 onlineAutoAdvanceState.resetSinglePlayerCandidate = function()
     onlineAutoAdvanceState.singleCandidateKey = nil
     onlineAutoAdvanceState.singleCandidateSince = nil
+end
+
+onlineAutoAdvanceState.resetScenarioRedPolicyCandidate = function()
+    onlineAutoAdvanceState.scenarioRedCandidateKey = nil
+    onlineAutoAdvanceState.scenarioRedCandidateSince = nil
+    onlineAutoAdvanceState.scenarioRedPendingKey = nil
+    onlineAutoAdvanceState.scenarioRedPendingCommand = nil
+    onlineAutoAdvanceState.scenarioRedPendingPolicyRecord = nil
+    onlineAutoAdvanceState.scenarioRedPendingStateKey = nil
+    onlineAutoAdvanceState.scenarioRedPendingSince = nil
 end
 
 onlineAutoAdvanceState.getSinglePlayerRequest = function(gameplayBlocked)
@@ -1516,6 +1540,117 @@ local function executeOrQueueCommand(commandPayload)
         end
     end
     return ok, ok and nil or "local_command_failed"
+end
+
+onlineAutoAdvanceState.showScenarioRedPolicyCommandPreview = function(command)
+    -- HARD GUARDRAIL:
+    -- Runtime preview sequencing is frozen for Scenario playability. Do not tune
+    -- this path while changing generation/archetypes.
+    if type(command) ~= "table" or not gameRuler or not grid then
+        return false
+    end
+
+    local actionType = tostring(command.actionType or "")
+    if actionType ~= "move" and actionType ~= "attack" and actionType ~= "repair" then
+        return false
+    end
+
+    local fromRow = tonumber(command.fromRow)
+    local fromCol = tonumber(command.fromCol)
+    local toRow = tonumber(command.toRow)
+    local toCol = tonumber(command.toCol)
+    if not fromRow or not fromCol or not toRow or not toCol then
+        return false
+    end
+
+    if grid.clearForcedHighlightedCells then
+        grid:clearForcedHighlightedCells()
+    end
+    if grid.clearActionHighlights then
+        grid:clearActionHighlights()
+    end
+    if grid.selectUnit then
+        grid:selectUnit(fromRow, fromCol)
+    end
+
+    local previewOk = false
+    if actionType == "move" and gameRuler.previewUnitMovement then
+        previewOk = gameRuler:previewUnitMovement(fromRow, fromCol) == true
+    elseif actionType == "attack" and gameRuler.previewUnitAttack then
+        previewOk = gameRuler:previewUnitAttack(fromRow, fromCol) == true
+    elseif actionType == "repair" and gameRuler.previewUnitRepair then
+        previewOk = gameRuler:previewUnitRepair(fromRow, fromCol) == true
+    end
+
+    if grid.addAIDecisionEffect then
+        grid:addAIDecisionEffect(toRow, toCol, actionType)
+        previewOk = true
+    end
+    if grid._cacheForcedPreviewCells then
+        grid:_cacheForcedPreviewCells()
+    end
+
+    return previewOk
+end
+
+onlineAutoAdvanceState.executeScenarioRedPolicyCommand = function(command, policyRecord, stateKey)
+    if command and stateKey ~= onlineAutoAdvanceState.scenarioRedLastFailedStateKey then
+        perfMetrics.beginSection("scenario_red_policy")
+        local ok = executeOrQueueCommand(command)
+        perfMetrics.endSection("scenario_red_policy")
+        onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
+        if ok then
+            onlineAutoAdvanceState.scenarioRedLastFailedStateKey = nil
+            clearActiveUnitSelection()
+        else
+            onlineAutoAdvanceState.scenarioRedLastFailedStateKey = stateKey
+            logger.error("GAMEPLAY", "Scenario Red Policy command failed:", tostring(policyRecord and policyRecord.reason or "unknown"))
+            if command.actionType ~= "end_turn" then
+                executeOrQueueCommand({ actionType = "end_turn" })
+            end
+        end
+        return true
+    end
+    return false
+end
+
+onlineAutoAdvanceState.processPendingScenarioRedPolicyCommand = function(redPolicyKey, now)
+    if not onlineAutoAdvanceState.scenarioRedPendingCommand then
+        return false
+    end
+
+    if onlineAutoAdvanceState.scenarioRedPendingKey ~= redPolicyKey then
+        onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
+        return false
+    end
+
+    local pendingSince = tonumber(onlineAutoAdvanceState.scenarioRedPendingSince or now) or now
+    local previewDelay = tonumber(onlineAutoAdvanceState.scenarioRedPreviewDelaySec) or 0
+    if (now - pendingSince) < previewDelay then
+        return true
+    end
+
+    onlineAutoAdvanceState.executeScenarioRedPolicyCommand(
+        onlineAutoAdvanceState.scenarioRedPendingCommand,
+        onlineAutoAdvanceState.scenarioRedPendingPolicyRecord,
+        onlineAutoAdvanceState.scenarioRedPendingStateKey
+    )
+    return true
+end
+
+onlineAutoAdvanceState.stageScenarioRedPolicyCommand = function(command, policyRecord, redPolicyKey, stateKey, now)
+    local previewDelay = tonumber(onlineAutoAdvanceState.scenarioRedPreviewDelaySec) or 0
+    local previewShown = previewDelay > 0 and onlineAutoAdvanceState.showScenarioRedPolicyCommandPreview(command)
+    if previewShown then
+        onlineAutoAdvanceState.scenarioRedPendingKey = redPolicyKey
+        onlineAutoAdvanceState.scenarioRedPendingCommand = command
+        onlineAutoAdvanceState.scenarioRedPendingPolicyRecord = policyRecord
+        onlineAutoAdvanceState.scenarioRedPendingStateKey = stateKey
+        onlineAutoAdvanceState.scenarioRedPendingSince = now
+        return true
+    end
+
+    return onlineAutoAdvanceState.executeScenarioRedPolicyCommand(command, policyRecord, stateKey)
 end
 
 local function requestSurrenderFromUi()
@@ -3043,6 +3178,7 @@ local function dismissMatchObjectiveModal(reason, action)
     onlineAutoAdvanceState.matchObjectiveFocusedButton = "primary"
     onlineAutoAdvanceState.matchObjectiveHoveredButton = nil
     onlineAutoAdvanceState.matchObjectiveModalState = nil
+    onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
     local dismissAction = action == "secondary" and "secondary" or "primary"
     print(string.format("[Gameplay] Match objective modal dismissed (%s, action=%s)", tostring(reason or "unknown"), dismissAction))
     local callback = dismissAction == "secondary" and onDismissSecondary or onDismiss
@@ -3524,7 +3660,8 @@ local function initializeComponents()
 
     -- Initialize AI if in single player or AI vs AI mode
     aiPlayer = nil
-    if gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
+    if gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI then
+        local AiClass = require("ai")
         local aiFaction = GAME.getAIFactionId()
         
         aiPlayer = AiClass.new({
@@ -3536,6 +3673,8 @@ local function initializeComponents()
         aiPlayer:setAiReference(resolvedReference, "initialize_components")
 
         logger.debug("GAMEPLAY", "AI initialized - Faction:", aiFaction, "Profile:", aiPlayer.aiReference, "Locked:", not aiPlayer.canChangeProfile)
+    elseif gameMode == GAME.MODE.SCENARIO then
+        logger.debug("GAMEPLAY", "Scenario Red Policy runtime initialized - standard AI disabled for Scenario Mode")
     end
 
     onlineSession = nil
@@ -3557,6 +3696,8 @@ local function initializeComponents()
     onlineAutoAdvanceState.singleCandidateKey = nil
     onlineAutoAdvanceState.singleCandidateSince = nil
     onlineAutoAdvanceState.singleIssuedKey = nil
+    onlineAutoAdvanceState.scenarioRedLastFailedStateKey = nil
+    onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
     matchObjectiveModalVisible = false
     matchObjectiveCloseButtonBounds = nil
     onlineAutoAdvanceState.matchObjectiveSecondaryButtonBounds = nil
@@ -4302,7 +4443,7 @@ function gameplay.enter(stateMachine, prevState, params)
         grid:enter()
     end
 
-    if (gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO) and aiPlayer then
+    if (gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI) and aiPlayer then
         aiPlayer:enter(gameRuler, grid)
     end
 
@@ -4335,6 +4476,15 @@ function gameplay.update(dt)
     processOnlineLockstepEvents(dt)
     local onlinePaused = isOnlineModeActive() and onlineSession and (not onlineSession.connected) and gameRuler and gameRuler.currentPhase ~= "gameOver"
     local objectiveModalVisible = hasVisibleMatchObjectiveModal()
+    local confirmDialogVisible = ConfirmDialog and type(ConfirmDialog.isActive) == "function" and ConfirmDialog.isActive()
+    local gameLogVisible = GameLogViewer and type(GameLogViewer.isActive) == "function" and GameLogViewer.isActive()
+    local gameplayMusicDucked = objectiveModalVisible
+        or confirmDialogVisible
+        or gameLogVisible
+        or hasVisibleUnitCodexOverlay()
+        or hasVisibleOnlineEloSummary()
+        or (gameRuler and gameRuler.currentPhase == "gameOver")
+    audioRuntime.setMusicDucked(gameplayMusicDucked, gameplayMusicDucked and "gameplay_overlay" or "gameplay_clear")
     local gameplayBlocked = onlinePaused or objectiveModalVisible
 
     if gameRuler and not gameplayBlocked then
@@ -4400,8 +4550,96 @@ function gameplay.update(dt)
         flushResumeSnapshotIfStable("update")
     end
 
-    -- Handle AI turn if it's AI's turn and no animations are in progress
-    if aiPlayer and gameRuler and not gameplayBlocked then
+    -- Scenario Mode uses the verified Scenario Red Policy runtime, never the standard AI.
+    if gameMode == GAME.MODE.SCENARIO
+        and gameRuler
+        and not gameplayBlocked
+        and gameRuler.currentPhase == "turn"
+        and gameRuler.currentTurnPhase == "actions"
+        and gameRuler.currentPlayer == 2
+        and not gameRuler:isScenarioRedPolicyAnimationBlocked()
+        and not matchObjectiveModalVisible
+        and not unitCodexVisible
+        and not onlineEloSummaryVisible
+        and (not ConfirmDialog or type(ConfirmDialog.isActive) ~= "function" or not ConfirmDialog.isActive())
+        and (not GameLogViewer or type(GameLogViewer.isActive) ~= "function" or not GameLogViewer.isActive()) then
+        local phaseInfo = gameRuler:getCurrentPhaseInfo()
+        local phaseKey = ui and ui.getAIPanelPhaseKey and ui:getAIPanelPhaseKey(phaseInfo)
+            or onlineAutoAdvanceState.buildKey("scenario_red_policy", phaseInfo)
+        if GAME and GAME.CURRENT then
+            GAME.CURRENT.AI_PANEL_STATUS = {
+                phaseKey = phaseKey,
+                player = 2,
+                status = "thinking"
+            }
+        end
+
+        local redPolicyKey = phaseKey .. "|" .. tostring(gameRuler.currentTurnActions or 0)
+        local now = getOnlineNowSeconds()
+        if onlineAutoAdvanceState.scenarioRedCandidateKey ~= redPolicyKey then
+            onlineAutoAdvanceState.scenarioRedCandidateKey = redPolicyKey
+            onlineAutoAdvanceState.scenarioRedCandidateSince = now
+        end
+
+        if (now - tonumber(onlineAutoAdvanceState.scenarioRedCandidateSince or now)) >= onlineAutoAdvanceState.scenarioRedVisibleDelaySec then
+            local pendingHandled = onlineAutoAdvanceState.processPendingScenarioRedPolicyCommand(redPolicyKey, now)
+            if not pendingHandled then
+                local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+                print("[SCENARIO_TRACE][Gameplay] " .. string.format(
+                    "red_policy.request scenario=%s turn=%s actionIndex=%s phaseKey=%s",
+                    tostring(scenarioState and scenarioState.id or ""),
+                    tostring(gameRuler.currentTurn or ""),
+                    tostring(gameRuler.currentTurnActions or ""),
+                    tostring(phaseKey or "")
+                ))
+                local command, policyRecord = require("scenarioRedRuntime").chooseCommand(gameRuler, grid, {
+                    scenario = scenarioState,
+                    traceScenarioRuntime = true
+                })
+                local recordText = "record=nil"
+                if type(policyRecord) == "table" then
+                    recordText = string.format(
+                        "ok=%s reason=%s stateHash=%s selected=%s candidates=%s",
+                        tostring(policyRecord.ok),
+                        tostring(policyRecord.reason or ""),
+                        tostring(policyRecord.stateHash or ""),
+                        tostring(policyRecord.selectedActionId or (policyRecord.selectedAction and policyRecord.selectedAction.id) or ""),
+                        tostring(policyRecord.candidateCount or "")
+                    )
+                end
+                local commandText = "nil"
+                if type(command) == "table" then
+                    if command.actionType == "move" or command.actionType == "attack" then
+                        commandText = string.format(
+                            "%s %s,%s->%s,%s",
+                            tostring(command.actionType),
+                            tostring(command.fromRow or ""),
+                            tostring(command.fromCol or ""),
+                            tostring(command.toRow or ""),
+                            tostring(command.toCol or "")
+                        )
+                    else
+                        commandText = tostring(command.actionType or "unknown")
+                    end
+                end
+                print("[SCENARIO_TRACE][Gameplay] red_policy.result " .. recordText .. " command=" .. commandText)
+                local stateKey = tostring(policyRecord and policyRecord.stateHash or "")
+                    .. ":"
+                    .. tostring(policyRecord and policyRecord.selectedActionId or "")
+                if command and stateKey ~= onlineAutoAdvanceState.scenarioRedLastFailedStateKey then
+                    onlineAutoAdvanceState.stageScenarioRedPolicyCommand(command, policyRecord, redPolicyKey, stateKey, now)
+                elseif not command and policyRecord and policyRecord.reason ~= "not_red_to_move" then
+                    onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
+                    logger.error("GAMEPLAY", "Scenario Red Policy unavailable:", tostring(policyRecord.reason or "unknown"))
+                end
+            end
+        end
+    else
+        onlineAutoAdvanceState.resetScenarioRedPolicyCandidate()
+    end
+
+    -- Handle standard AI turn if it's AI's turn and no animations are in progress.
+    if gameMode ~= GAME.MODE.SCENARIO and aiPlayer and gameRuler and not gameplayBlocked then
         local phaseInfo = gameRuler:getCurrentPhaseInfo()
 
         -- Handle AI turns for both single player and AI vs AI modes
@@ -4427,7 +4665,7 @@ function gameplay.update(dt)
                 aiPlayer.actionsPhaseStarted = false
                 aiPlayer.hasDeployedThisTurn = false
             end
-        elseif GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER or GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
+        elseif GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER then
             -- In single player mode, only process when it's the AI player's turn
             shouldProcessAI = (phaseInfo.currentPlayer == gameRuler.aiPlayerNumber)
                 and not gameRuler:isAnimationInProgress()
@@ -4443,7 +4681,7 @@ function gameplay.update(dt)
                 perfMetrics.endSection("ai_turn")
             end
         end
-    elseif gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI or gameMode == GAME.MODE.SCENARIO then
+    elseif gameMode == GAME.MODE.SINGLE_PLAYER or gameMode == GAME.MODE.AI_VS_AI then
         if not aiPlayer then
             logger.error("GAMEPLAY", "ERROR: aiPlayer is nil!")
         end
@@ -4546,7 +4784,7 @@ function gameplay.update(dt)
         and not onlineEloSummaryVisible
         and (not ConfirmDialog or type(ConfirmDialog.isActive) ~= "function" or not ConfirmDialog.isActive())
         and (not GameLogViewer or type(GameLogViewer.isActive) ~= "function" or not GameLogViewer.isActive())
-        and not gameRuler:isAnimationInProgress() then
+        and not gameRuler:isScenarioTurnHandoffBlocked() then
         gameRuler:checkForStalledUnits()
         if gameRuler:areActionsComplete() then
             local ok = executeOrQueueCommand({ actionType = "end_turn" })

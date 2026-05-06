@@ -36,6 +36,7 @@ local function installLoveAudioStub()
     local now = 100
     local activeSources = 0
     local resumeCalls = 0
+    local sources = {}
     love.timer.getTime = function()
         now = now + 0.25
         return now
@@ -49,7 +50,9 @@ local function installLoveAudioStub()
             __pitch = 1,
             __played = 0,
             __isPlaying = false,
+            __looping = false,
         }
+        sources[#sources + 1] = source
 
         function source:setVolume(value)
             self.__volume = value
@@ -57,6 +60,10 @@ local function installLoveAudioStub()
 
         function source:setPitch(value)
             self.__pitch = value
+        end
+
+        function source:setLooping(value)
+            self.__looping = value == true
         end
 
         function source:stop()
@@ -106,6 +113,9 @@ local function installLoveAudioStub()
         end,
         getResumeCalls = function()
             return resumeCalls
+        end,
+        getSources = function()
+            return sources
         end,
     }
 end
@@ -191,6 +201,50 @@ runTest("audio_runtime_tracks_first_session_and_match_playback", function()
     assertTrue(diagnostics.remotePlaySessionFirstPlaybackPath == "assets/audio/GenericButton14.wav", "session first playback should be tracked")
     assertTrue(diagnostics.remotePlayMatchFirstPlaybackPath == "assets/audio/GenericButton6.wav", "match first playback should be tracked")
     assertTrue(type(diagnostics.activeSourceCount) == "number", "active source count should be tracked")
+end)
+
+runTest("audio_runtime_music_tracks_loop_fade_and_duck", function()
+    resetModules()
+    installLoveAudioStub()
+    SETTINGS = {
+        AUDIO = {
+            SFX = true,
+            SFX_VOLUME = 0.4,
+            MUSIC = true,
+            MUSIC_VOLUME = 0.18,
+            GAMEPLAY_MUSIC_MULTIPLIER = 0.65,
+            MUSIC_DUCK_MULTIPLIER = 0.35,
+            MUSIC_FADE_IN_SEC = 1.8,
+            MUSIC_FADE_SEC = 0.45
+        }
+    }
+
+    local audioRuntime = require("audio_runtime")
+    assertTrue(audioRuntime.playMenuMusic() == true, "menu music should start")
+    local sources = love.__audio_stub.getSources()
+    local menuSource = sources[#sources]
+    assertTrue(menuSource.__type == "stream", "music should load as a stream")
+    assertTrue(menuSource.__looping == true, "music should loop")
+    assertTrue(menuSource.__volume == 0, "music should begin silent for fade-in")
+
+    audioRuntime.update(0.9)
+    assertTrue(menuSource.__volume > 0 and menuSource.__volume < 0.18, "music should fade in toward target")
+    audioRuntime.update(2.0)
+    assertTrue(math.abs(menuSource.__volume - 0.18) < 0.01, "music should reach configured target volume")
+
+    audioRuntime.setMusicDucked(true, "test_modal")
+    audioRuntime.update(0.45)
+    assertTrue(menuSource.__volume < 0.12, "ducking should lower music under overlays")
+    audioRuntime.setMusicDucked(false, "clear")
+    audioRuntime.update(0.45)
+    assertTrue(menuSource.__volume > 0.13, "clearing duck should restore music target")
+
+    assertTrue(audioRuntime.playGameplayMusic() == true, "gameplay music should start")
+    local gameplaySource = love.__audio_stub.getSources()[#love.__audio_stub.getSources()]
+    assertTrue(gameplaySource.__path == "assets/audio/GameplayTheme.mp3", "gameplay state should use gameplay theme")
+    assertTrue(menuSource.__isPlaying == false, "switching music should stop previous track")
+    audioRuntime.update(2.0)
+    assertTrue(math.abs(gameplaySource.__volume - 0.117) < 0.01, "gameplay music should use lower gameplay target")
 end)
 
 runTest("audio_runtime_resume_after_focus_and_visibility_regain_updates_diagnostics", function()

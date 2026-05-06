@@ -1,7 +1,7 @@
 # Steam Release Upload Checklist
 
-Update: 2026-04-13
-Status: Completed for current non-puzzle release baseline.
+Update: 2026-05-06
+Status: Completed for the current market release baseline, including Scenario Mode puzzle content.
 
 ## 1. Steamworks backend
 - [x] Achievements configured and published.
@@ -22,6 +22,8 @@ Status: Completed for current non-puzzle release baseline.
 - [x] Steam launch + overlay validated.
 - [x] Achievements and leaderboard validated.
 - [x] Online + local multiplayer validated.
+- [x] Scenario Mode list/runtime validated with `P001`-`P010`.
+- [x] Scenario progress persistence validated for `ScenarioProgress.dat`.
 - [x] Steam Deck launch + controller flow validated.
 
 ## 5. Known issue policy
@@ -43,4 +45,4 @@ Status: Completed for current non-puzzle release baseline.
 - [x] No blocking regressions detected.
 
 ## 9. Go / no-go
-- [x] GO for the current release baseline.
+- [x] GO for the current market release baseline.

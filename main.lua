@@ -26,6 +26,7 @@ end
 
 function love.update(dt)
     steamRuntime.update(dt)
+    audioRuntime.update(dt)
     state_machine.update(dt)
 end
 

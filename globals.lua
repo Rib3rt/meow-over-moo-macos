@@ -99,11 +99,16 @@ SETTINGS = {
         SFX = true,
         SFX_VOLUME = 0.4,
         MUSIC = true,
-        MUSIC_VOLUME = 0.1
+        MUSIC_VOLUME = 0.18,
+        GAMEPLAY_MUSIC_MULTIPLIER = 0.65,
+        MUSIC_DUCK_MULTIPLIER = 0.35,
+        MUSIC_FADE_IN_SEC = 1.8,
+        MUSIC_FADE_SEC = 0.45
     },
     -- Build-time feature switches. Do not expose these in runtime menus.
     FEATURES = {
-        SCENARIO_MODE = false
+        SCENARIO_MODE = true,
+        SCENARIO_EDITOR = false
     },
     INPUT = {
         GAMEPAD_AXIS_THRESHOLD = 0.45,

@@ -10,6 +10,47 @@ local function resolveScenarioReturnState()
     return "scenarioSelect"
 end
 
+local function scenarioTrace(message)
+    print("[SCENARIO_TRACE][ScenarioGameplay] " .. tostring(message or ""))
+end
+
+local function snapshotSummary(snapshot)
+    local counts = {
+        total = 0,
+        blue = 0,
+        red = 0,
+        neutral = 0,
+        activeRed = 0,
+        redCommandants = 0
+    }
+    for _, unit in ipairs(snapshot and snapshot.boardUnits or {}) do
+        local player = tonumber(unit.player)
+        local name = tostring(unit.name or "")
+        counts.total = counts.total + 1
+        if player == 1 then
+            counts.blue = counts.blue + 1
+        elseif player == 2 then
+            counts.red = counts.red + 1
+            if name == "Commandant" then
+                counts.redCommandants = counts.redCommandants + 1
+            else
+                counts.activeRed = counts.activeRed + 1
+            end
+        else
+            counts.neutral = counts.neutral + 1
+        end
+    end
+    return string.format(
+        "units=%d blue=%d red=%d activeRed=%d redCommandants=%d neutral=%d",
+        counts.total,
+        counts.blue,
+        counts.red,
+        counts.activeRed,
+        counts.redCommandants,
+        counts.neutral
+    )
+end
+
 -- SCENARIO-ONLY WRAPPER:
 -- This state exists only to enter gameplay with GAME.MODE.SCENARIO.
 -- Do not add generic gameplay behavior here.
@@ -17,6 +58,13 @@ function scenarioGameplay.enter(stateMachine)
     if GAME and GAME.CURRENT then
         GAME.CURRENT.MODE = GAME.MODE.SCENARIO
     end
+    local scenario = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    scenarioTrace(string.format(
+        "enter id=%s source=%s %s",
+        tostring(scenario and scenario.id or ""),
+        tostring(scenario and scenario.sourcePath or ""),
+        snapshotSummary(scenario and scenario.snapshot or nil)
+    ))
     return gameplay.enter(stateMachine, resolveScenarioReturnState(), {
         scenario = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
     })

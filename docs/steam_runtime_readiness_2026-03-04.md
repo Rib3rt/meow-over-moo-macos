@@ -1,13 +1,13 @@
-# Steam Runtime Readiness Audit (2026-03-04)
+# Steam Runtime Readiness Audit (updated 2026-05-06)
 
 ## Scope
 - Project: `/Users/mdc/Documents/MeowOverMoo`
-- Runtime target: LOVE 11.5 + Steam AppID `480`
-- Focus: normal Steam desktop readiness (online lobby/invite/join/lockstep/rating)
+- Runtime target: LOVE 11.5 + Steam AppID `1573941`
+- Focus: Steam desktop readiness for the market build (standard modes, online lobby/invite/join/lockstep/rating, Scenario Mode progress sync)
 
 ## Verdict
 - **Current status: Release-ready, stable baseline.**
-- Runtime integration and validation gates for the non-puzzle baseline are considered complete for this release cycle.
+- Runtime integration and validation gates for the market baseline, including Scenario Mode puzzle content, are considered complete for this release cycle.
 
 ## Functional Areas
 
@@ -42,8 +42,14 @@
   - Existing leaderboard screen and lobby rating decoration remain wired.
   - No policy changes required in this patch.
 
+### 6) Scenario progress persistence
+- Status: **Pass**
+- Evidence:
+  - Scenario Mode writes `ScenarioProgress.dat` through LÖVE save storage.
+  - Steam Cloud setup should sync `ScenarioProgress.dat` alongside `OnlineRatingProfile.dat`.
+
 ## Known Risks / Open QA Items
-1. None blocking the current release baseline.
+1. None blocking the current market release baseline.
 
 ## Release Gate Checklist
 1. Two-account desktop test pass (host and guest role swapped): complete.

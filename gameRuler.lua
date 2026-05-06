@@ -22,6 +22,32 @@ local SCHEDULER_RULES = AI_PARAMS.SCHEDULER or {}
 local ANIMATION_POLL_INTERVAL = tonumber(SCHEDULER_RULES.ANIMATION_POLL_INTERVAL) or 0.05
 local DEFAULT_LAST_GAME_LOG_PATH = "LastGameLog.txt"
 local DRAW_AT_TURN_PROTECTION_TOKEN = "__LAST_GAME_LOG_DRAW_TOKEN__"
+local STANDARD_COMMAND_HUB_DEFENSE_TIMING = {
+    startDelay = 0.1,
+    missingHubDelay = 0.05,
+    missingHubPositionDelay = 0.2,
+    scanStepDelay = 0.4,
+    completeDelay = 0.5,
+    destroyEvaluateDelay = 0.3
+}
+local SCENARIO_COMMAND_HUB_DEFENSE_TIMING = {
+    -- HARD GUARDRAIL:
+    -- Do not change Scenario movement, turn-phase, or timing behavior while
+    -- working on scenario generation. Generator work belongs in scenario_tooling
+    -- and must not tune this runtime path.
+    -- Scenario Mode contract, do not loosen:
+    -- show Commandant Defense immediately after Red handoff, scan cells with
+    -- the normal cadence, then enter Red Policy actions without a silent tail.
+    startDelay = 0,
+    missingHubDelay = 0,
+    missingHubPositionDelay = 0,
+    scanStepDelay = 0.4,
+    completeDelay = 0,
+    destroyEvaluateDelay = 0
+}
+local SCENARIO_TURN_HANDOFF_BLOCKING_ACTION = {
+    scenarioTurnHandoffBlocking = true
+}
 
 --------------------------------------------------
 -- PHASE DEFINITIONS AND TRANSITIONS
@@ -1074,17 +1100,31 @@ function gameRuler:getAdjacentCells(row, col)
     return adjacentCells
 end
 
+function gameRuler:getCommandHubDefenseTiming()
+    if self:isScenarioMode() then
+        return SCENARIO_COMMAND_HUB_DEFENSE_TIMING
+    end
+    return STANDARD_COMMAND_HUB_DEFENSE_TIMING
+end
+
 function gameRuler:executeCommandHubDefense()
     -- Set flag to disable the button
     self.commandHubDefenseActive = true
     self.commandHubDefenseComplete = false
 
-    -- **FIX: Wait for all animations to complete before starting Commandant defense**
+    -- **FIX: Wait for action-resolution animations before starting Commandant defense**
     local function waitForAnimationsAndExecute()
-        -- Check if there are any moving units or visual spawn/attack animations still running.
-        if self.currentGrid
-            and self.currentGrid.hasActiveAnimations
-            and self.currentGrid:hasActiveAnimations() then
+        -- Scenario Mode must not wait on residual visual particles here; otherwise
+        -- the Red handoff gets a silent pause before the Commandant scan starts.
+        local blocked = false
+        if self:isScenarioMode() then
+            blocked = self:isScenarioTurnHandoffBlocked()
+        else
+            blocked = self.currentGrid
+                and self.currentGrid.hasActiveAnimations
+                and self.currentGrid:hasActiveAnimations()
+        end
+        if blocked then
             -- Wait a bit longer and check again
             self:scheduleAction(ANIMATION_POLL_INTERVAL, waitForAnimationsAndExecute)
             return
@@ -1101,10 +1141,20 @@ end
 function gameRuler:executeCommandHubDefenseInternal()
     -- Find the current player's Commandant
     local currentPlayer = self.currentPlayer
+    local timing = self:getCommandHubDefenseTiming()
+    local function scheduleOrRun(delay, callback)
+        delay = tonumber(delay) or 0
+        if delay <= 0 then
+            callback()
+        else
+            self:scheduleAction(delay, callback)
+        end
+    end
+
     local commandHub = self:findPlayerCommandHub(currentPlayer)
     if not commandHub then
         if self:isScenarioMode() then
-            self:scheduleAction(0.05, function()
+            scheduleOrRun(timing.missingHubDelay, function()
                 self.commandHubDefenseComplete = true
                 self.commandHubDefenseActive = false
                 self:nextTurnPhase()
@@ -1155,7 +1205,7 @@ function gameRuler:executeCommandHubDefenseInternal()
     -- Get the current player's Commandant position
     local hubPos = self.commandHubPositions[currentPlayer]
     if not hubPos then
-        self:scheduleAction(0.2, function()
+        scheduleOrRun(timing.missingHubPositionDelay, function()
             self.commandHubDefenseActive = false
             self:nextTurnPhase()
         end)
@@ -1186,7 +1236,7 @@ function gameRuler:executeCommandHubDefenseInternal()
             -- Set a flag to indicate completion state
             self.commandHubDefenseComplete = true
             -- Automatically go to end turn phase after a short delay
-            self:scheduleAction(0.5, function()
+            scheduleOrRun(timing.completeDelay, function()
                 -- Only set to false during phase transition to avoid button spamming
                 self.commandHubDefenseActive = false
                 self:nextTurnPhase()
@@ -1203,8 +1253,8 @@ function gameRuler:executeCommandHubDefenseInternal()
             -- **FIX: Re-check grid state to ensure unit still exists**
             local targetUnit = self.currentGrid:getUnitAt(targetRow, targetCol)
 
-            -- Only process enemy units (not empty cells, not current player's friendly units)
-            if targetUnit and targetUnit.player ~= currentPlayer and targetUnit.player ~= 0 then
+            -- Process enemy units and neutral Rocks. Scenario Commandant defense can open neutral gates.
+            if targetUnit and targetUnit.player ~= currentPlayer then
 
                 -- Any Commandant attack is interaction for draw-counter purposes.
                 if DRAW_RULES.RESET_ON_COMMANDANT_ATTACK ~= false
@@ -1259,8 +1309,13 @@ function gameRuler:executeCommandHubDefenseInternal()
 
                 -- If the unit is destroyed
                 if targetUnit.currentHp <= 0 then
+                    if targetPlayer == 0 then
+                        self.gameStats.neutralBuildingsDestroyed = self.gameStats.neutralBuildingsDestroyed + 1
+                    end
 
-                    self.currentGrid:createDestructionEffect(targetRow, targetCol, targetUnit.playerColor)
+                    self.currentGrid:createDestructionEffect(targetRow, targetCol, targetUnit.playerColor, {
+                        source = "command_hub_defense"
+                    })
 
                     -- Play unit destruction sound
                     if SETTINGS.AUDIO.SFX then
@@ -1282,7 +1337,7 @@ function gameRuler:executeCommandHubDefenseInternal()
                     self.currentGrid:removeUnit(targetRow, targetCol)
 
                     if self:isScenarioMode() then
-                        self:scheduleAction(0.3, function()
+                        scheduleOrRun(timing.destroyEvaluateDelay, function()
                             self:evaluateScenarioEndConditions("scenario_commandant_defense_destroy")
                         end)
                     else
@@ -1328,13 +1383,18 @@ function gameRuler:executeCommandHubDefenseInternal()
                     "scan check in " .. self:gridToChessNotation(targetRow, targetCol)
                 )
             end
+
+            if self.currentPhase == PHASES.GAME_OVER then
+                return
+            end
         end
 
         -- Move to the next direction
         currentDirectionIndex = currentDirectionIndex + 1
 
-        -- Schedule next direction with delay
-        self:scheduleAction(0.4, processNextDirection)
+        -- Schedule next direction with delay. Scenario Mode resolves this
+        -- immediately so the Red handoff is not perceived as a frozen pause.
+        scheduleOrRun(timing.scanStepDelay, processNextDirection)
     end
 
     -- Start processing the first direction immediately
@@ -1947,16 +2007,51 @@ end
 
 
 function gameRuler:finalizeTurnTransition()
+    -- HARD GUARDRAIL:
+    -- This is shipped Scenario runtime phase flow, not generator logic. Do not
+    -- modify movement/phase/timing here for scenario-generation experiments.
+    local scenarioMode = self:isScenarioMode()
     self.currentTurnPhase = TURN_PHASES.COMMAND_HUB
+    if scenarioMode then
+        self.commandHubDefenseActive = false
+        self.commandHubDefenseComplete = false
+    end
     if self.currentPlayer == 1 then
         -- Reset only at the beginning of a new full turn.
         self.turnHadInteraction = false
     end
 
-    -- Commandant should attack at the START of every player's turn
-    self:scheduleAction(0.1, function()
-        self:executeCommandHubDefense()
-    end)
+    if scenarioMode and self.currentPlayer == 2 then
+        -- Scenario-only Red handoff: show the Red turn presentation before Commandant defense.
+        local ui = GAME and GAME.CURRENT and GAME.CURRENT.UI or nil
+        if ui and ui.startTurnZoom then
+            ui:startTurnZoom()
+        end
+        if SETTINGS.AUDIO.SFX then
+            soundCache.play("assets/audio/SnappyButton2.wav", {
+                volume = SETTINGS.AUDIO.SFX_VOLUME
+            })
+        end
+    end
+
+    -- Scenario puzzles have no Blue Commandant phase. Blue starts directly in
+    -- actions; Red still runs Commandant Defense before Scenario Red Policy.
+    if scenarioMode and self.currentPlayer == 1 then
+        self.currentTurnPhase = TURN_PHASES.ACTIONS
+    else
+        -- Commandant defense is a turn rule. Scenario Red Policy starts only after
+        -- this phase advances to actions, and standard AI remains disabled there.
+        local commandHubTiming = self:getCommandHubDefenseTiming()
+        local commandHubStartDelay = tonumber(commandHubTiming.startDelay) or 0
+        local function startCommandHubDefense()
+            self:executeCommandHubDefense()
+        end
+        if commandHubStartDelay <= 0 then
+            startCommandHubDefense()
+        else
+            self:scheduleAction(commandHubStartDelay, startCommandHubDefense)
+        end
+    end
 
     -- Reset actions counter
     self.currentTurnActions = 0
@@ -2409,6 +2504,7 @@ function gameRuler:buildResumeSnapshot()
         for _, unit in ipairs(supply or {}) do
             if unit and unit.name then
                 snapshot.playerSupplies[factionId][#snapshot.playerSupplies[factionId] + 1] = {
+                    scenarioUnitId = unit.scenarioUnitId or unit.id,
                     name = unit.name,
                     player = tonumber(unit.player) or factionId,
                     currentHp = tonumber(unit.currentHp or unit.startingHp)
@@ -2430,6 +2526,7 @@ function gameRuler:buildResumeSnapshot()
                     end
 
                     snapshot.boardUnits[#snapshot.boardUnits + 1] = {
+                        scenarioUnitId = unit.scenarioUnitId or unit.id,
                         row = row,
                         col = col,
                         name = unit.name,
@@ -2523,6 +2620,11 @@ function gameRuler:loadResumeSnapshot(snapshot)
 
         if resolvedPlayer == 1 or resolvedPlayer == 2 then
             unit.player = resolvedPlayer
+        end
+
+        local scenarioUnitId = unitState.scenarioUnitId or unitState.id
+        if scenarioUnitId ~= nil and tostring(scenarioUnitId) ~= "" then
+            unit.scenarioUnitId = tostring(scenarioUnitId)
         end
 
         local hp = tonumber(unitState.currentHp)
@@ -2626,11 +2728,19 @@ function gameRuler:loadResumeSnapshot(snapshot)
     local expectedBoardUnits = 0
     local placedBoardUnits = 0
     local commandantCounts = { [1] = 0, [2] = 0 }
-    for _, entry in ipairs(snapshot.boardUnits or {}) do
+    for entryIndex, entry in ipairs(snapshot.boardUnits or {}) do
         local row = tonumber(entry.row)
         local col = tonumber(entry.col)
         if row and col then
             expectedBoardUnits = expectedBoardUnits + 1
+            if entry.scenarioUnitId == nil or tostring(entry.scenarioUnitId) == "" then
+                entry.scenarioUnitId = table.concat({
+                    "legacy",
+                    tostring(entry.player or 0),
+                    tostring(entry.name or "unit"):gsub("%W+", "_"):lower(),
+                    tostring(entryIndex)
+                }, "_")
+            end
             local fallbackPlayer = entry.name == "Commandant" and inferCommandantPlayer(row, col) or nil
             local unit = rehydrateUnitFromSnapshot(entry, fallbackPlayer, false, row, col)
             if unit and grid:placeUnit(unit, row, col) then
@@ -2746,11 +2856,15 @@ end
 --------------------------------------------------
 -- ACTION HANDLERS
 --------------------------------------------------
-function gameRuler:scheduleAction(delay, callback)
-    table.insert(self.scheduledActions, {
+function gameRuler:scheduleAction(delay, callback, options)
+    local action = {
         timeRemaining = delay,
         callback = callback
-    })
+    }
+    if type(options) == "table" then
+        action.scenarioTurnHandoffBlocking = options.scenarioTurnHandoffBlocking == true
+    end
+    table.insert(self.scheduledActions, action)
 end
 
 function gameRuler:hasActiveAnimations()
@@ -3497,7 +3611,7 @@ function gameRuler:executeUnitMovement(fromRow, fromCol, toRow, toCol, isConquer
 
         self.currentGrid:placeUnit(unitData, toRow, toCol)
 
-        if not isConquerAction then
+        if not isConquerAction or self:isScenarioMode() then
             self:checkForStalledUnits()
         end
     end
@@ -3722,7 +3836,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                             -- Scenario: only Red Commandant destruction can end the match in victory.
                             self:scheduleAction(0.3, function()
                                 self:evaluateScenarioEndConditions("scenario_melee_commandant_destroy")
-                            end)
+                            end, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
                             scenarioOutcomeScheduled = true
                         else
                             -- Schedule game over with delay to let animation complete
@@ -3739,7 +3853,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                         self:scheduleAction(flashDuration, function()
                             -- Capture the position if the target was destroyed
                             self:executeUnitMovement(fromRow, fromCol, targetRow, targetCol, true)
-                        end)
+                        end, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
                     end
 
                     if self:isScenarioMode() then
@@ -3904,7 +4018,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                         if self:isScenarioMode() then
                             self:scheduleAction(0.3, function()
                                 self:evaluateScenarioEndConditions("scenario_beam_commandant_destroy")
-                            end)
+                            end, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
                         else
                             -- Schedule game over with delay to let animation complete
                             self:scheduleAction(0.3, function()
@@ -3961,7 +4075,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                 self:checkForStalledUnits()
             end
 
-            self:scheduleAction(impactDelay, resolveBeamDamage)
+            self:scheduleAction(impactDelay, resolveBeamDamage, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
 
             self.currentGrid:clearActionHighlights()
 
@@ -4124,7 +4238,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                         if self:isScenarioMode() then
                             self:scheduleAction(0.3, function()
                                 self:evaluateScenarioEndConditions("scenario_artillery_commandant_destroy")
-                            end)
+                            end, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
                         else
                             -- Schedule game over with delay to let animation complete
                             self:scheduleAction(0.3, function()
@@ -4172,7 +4286,7 @@ function gameRuler:executeUnitAttack(fromRow, fromCol, targetRow, targetCol)
                 
                 -- Check for stalled units
                 self:checkForStalledUnits()
-            end)
+            end, SCENARIO_TURN_HANDOFF_BLOCKING_ACTION)
         end
     end
 
@@ -4214,8 +4328,11 @@ function gameRuler:checkForStalledUnits()
         canDeploy = self:canDeployInActionsPhase()
     end
 
-    -- If all remaining active units are stalled AND player can't deploy, force turn completion
-    if activeUnits > 0 and stalledUnits >= activeUnits and not canDeploy then
+    local noRemainingUnitActions = activeUnits == 0 and totalUnits > 0
+    local allRemainingUnitsStalled = activeUnits > 0 and stalledUnits >= activeUnits
+
+    -- If no unit action remains available AND player can't deploy, force turn completion
+    if (noRemainingUnitActions or allRemainingUnitsStalled) and not canDeploy then
         -- Force complete the turn by setting actions to maximum
         self.currentTurnActions = self.maxActionsPerTurn
 
@@ -4992,6 +5109,63 @@ function gameRuler:isAnimationInProgress()
 
     -- Check scheduled actions
     if self.scheduledActions and #self.scheduledActions > 0 then
+        return true
+    end
+
+    return false
+end
+
+function gameRuler:isScenarioRedPolicyAnimationBlocked()
+    if not self:isScenarioMode() then
+        return self:isAnimationInProgress()
+    end
+
+    if self.currentGrid then
+        if self.currentGrid.hasActiveScenarioPolicyBlockingAnimations
+            and self.currentGrid:hasActiveScenarioPolicyBlockingAnimations() then
+            return true
+        end
+
+        -- Legacy active effects still block the policy unless the grid helper
+        -- explicitly classified them as non-blocking Commandant Defense visuals.
+        if self.currentGrid.activeEffects and #self.currentGrid.activeEffects > 0 then
+            return true
+        end
+    end
+
+    if self.scheduledActions and #self.scheduledActions > 0 then
+        return true
+    end
+
+    return false
+end
+
+function gameRuler:hasScenarioTurnHandoffBlockingScheduledActions()
+    for _, action in ipairs(self.scheduledActions or {}) do
+        if action.scenarioTurnHandoffBlocking == true then
+            return true
+        end
+    end
+    return false
+end
+
+function gameRuler:isScenarioTurnHandoffBlocked()
+    if not self:isScenarioMode() then
+        return self:isAnimationInProgress()
+    end
+
+    if self.currentGrid then
+        if self.currentGrid.hasActiveScenarioTurnHandoffAnimations
+            and self.currentGrid:hasActiveScenarioTurnHandoffAnimations() then
+            return true
+        end
+
+        -- Residual particles are intentionally non-blocking for Scenario handoff.
+        -- Only action-resolution work tagged by scheduleAction metadata can hold
+        -- the Blue->Red presentation back.
+    end
+
+    if self:hasScenarioTurnHandoffBlockingScheduledActions() then
         return true
     end
 

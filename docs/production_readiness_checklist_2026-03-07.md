@@ -1,4 +1,4 @@
-# Production Readiness Checklist - Updated 2026-05-02
+# Production Readiness Checklist - Updated 2026-05-06
 
 ## Current assessment
 - Core gameplay loop: ready
@@ -7,15 +7,17 @@
 - Steam Remote Play controls: ready
 - Steam online gameplay/lobby/invite flow: ready
 - Steam Deck control path: ready
+- Scenario Mode puzzle content: ready (`P001`-`P010`)
+- Scenario progress persistence: ready (`ScenarioProgress.dat`)
 - Packaging workflow: ready
-- AI runtime: release candidate
-- Public production release: ready for RC validation
+- AI runtime: market release candidate
+- Public production release: ready for market upload validation
 
 ## Release blockers
 - None.
 
 ## High-priority non-blockers
-- None for the current release baseline.
+- None for the current market baseline.
 
 ## Packaging status
 - Canonical Windows packaging flow is the main project folder plus:
@@ -27,7 +29,7 @@
 
 ## Repo leftovers found during scan
 ### Generated runtime artifacts
-- `DebugConsole.log` is disabled by default for RC.
+- `DebugConsole.log` is disabled by default for the market RC.
 - `SteamRuntimeError.log` is treated as a local runtime artifact.
 
 ### Generated perf artifacts
@@ -41,6 +43,7 @@
 These are not packaged as gameplay content by the current release-file collector, but they are still part of the source tree and should be reviewed before a final release freeze.
 
 ## Release status note
-1. The current baseline is a 2026-05-02 release candidate.
+1. The current baseline is the 2026-05-06 market release candidate.
 2. Tournament V2 is the canonical AI runtime.
-3. There are no open TODO items in the release checklist at this time.
+3. Scenario Mode with 10 promoted puzzle scenarios is part of the shipped market build.
+4. There are no open TODO items in the release checklist at this time.

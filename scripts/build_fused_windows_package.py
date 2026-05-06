@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -52,6 +54,8 @@ REQUIRED_EXTERNAL_PACKAGE_FILES = [
 
 
 OPTIONAL_OPENAL_OVERRIDE_DIR_NAME = "OPENAL_OVERRIDE_WIN64"
+OPTIONAL_WINDOWS_EXE_ICON_DIR_NAME = "WINDOWS_EXE_ICON_DROP"
+OPTIONAL_WINDOWS_EXE_ICON_TOOL_DIR_NAME = "WINDOWS_EXE_ICON_TOOL_DROP"
 
 EXTERNAL_ROOT_FILES = {
     "steam_appid.txt",
@@ -184,6 +188,55 @@ def resolve_optional_openal_override(path_value: str | None) -> Path | None:
     return None
 
 
+def resolve_optional_windows_exe_icon(input_root: Path) -> Path | None:
+    icon_dir = input_root / OPTIONAL_WINDOWS_EXE_ICON_DIR_NAME
+    if not icon_dir.is_dir():
+        return None
+
+    preferred = icon_dir / "MOM.ico"
+    if preferred.is_file():
+        return preferred
+
+    icons = sorted(icon_dir.glob('*.ico'))
+    if len(icons) == 1:
+        return icons[0]
+    return None
+
+
+def resolve_optional_windows_icon_tool(input_root: Path) -> Path | None:
+    tool_dir = input_root / OPTIONAL_WINDOWS_EXE_ICON_TOOL_DIR_NAME
+    if tool_dir.is_dir():
+        for name in ("rcedit-x64.exe", "rcedit.exe"):
+            candidate = tool_dir / name
+            if candidate.is_file():
+                return candidate
+
+    for name in ("rcedit-x64.exe", "rcedit.exe"):
+        resolved = shutil.which(name)
+        if resolved:
+            return Path(resolved)
+
+    return None
+
+
+def try_apply_windows_exe_icon(output_exe: Path, icon_path: Path | None, tool_path: Path | None) -> tuple[bool, str]:
+    if icon_path is None:
+        return False, "icon_missing"
+    if os.name != 'nt':
+        return False, "not_windows_host"
+    if tool_path is None:
+        return False, "tool_missing"
+
+    try:
+        subprocess.run([str(tool_path), str(output_exe), '--set-icon', str(icon_path)], check=True)
+    except subprocess.CalledProcessError as exc:
+        return False, f"tool_failed:{exc.returncode}"
+    except OSError as exc:
+        return False, f"tool_launch_failed:{exc}"
+
+    return True, "applied"
+
+
 def copy_runtime_dlls(runtime_root: Path, package_root: Path, openal_override: Path | None = None) -> None:
     for file_name in REQUIRED_LOVE_RUNTIME_FILES:
         if file_name == "love.exe":
@@ -275,6 +328,9 @@ def build_summary(
     keep_steam_appid: bool,
     validation: dict,
     openal_override: Path | None,
+    exe_icon_status: str,
+    exe_icon_path: Path | None,
+    exe_icon_tool: Path | None,
 ) -> str:
     return (
         "MeowOverMoo fused Windows package\n\n"
@@ -282,11 +338,15 @@ def build_summary(
         f"LOVE runtime: {runtime_root}\n"
         f"Final package: {package_root}\n"
         f"Keep steam_appid.txt: {'yes' if keep_steam_appid else 'no'}\n"
-        f"OpenAL override: {openal_override if openal_override is not None else 'default LOVE runtime'}\n\n"
+        f"OpenAL override: {openal_override if openal_override is not None else 'default LOVE runtime'}\n"
+        f"Windows EXE icon source: {exe_icon_path if exe_icon_path is not None else 'none'}\n"
+        f"Windows EXE icon tool: {exe_icon_tool if exe_icon_tool is not None else 'none'}\n"
+        f"Windows EXE icon status: {exe_icon_status}\n\n"
         f"Validation: {'OK' if validation['ok'] else 'FAILED'}\n"
         f"Missing required files: {len(validation['missing'])}\n\n"
         "Packaging result:\n"
         "- MOM.exe is fused from love.exe + MeowOverMoo.love\n"
+        "- If a Windows icon tool is present, the MOM.exe icon resource is replaced from WINDOWS_EXE_ICON_DROP\n"
         "- LOVE 11.5 runtime DLLs are beside MOM.exe\n"
         "- steam_bridge_native.dll and steam_api64.dll are also copied beside MOM.exe for robust Steam runtime loading\n"
         "- Steam Input VDF files are beside MOM.exe\n"
@@ -332,6 +392,9 @@ def write_manifest(
     keep_steam_appid: bool,
     validation: dict,
     openal_override: Path | None,
+    exe_icon_status: str,
+    exe_icon_path: Path | None,
+    exe_icon_tool: Path | None,
 ) -> None:
     payload = {
         "input_root": str(input_root),
@@ -341,6 +404,9 @@ def write_manifest(
         "generated_exe": str(package_root / "MOM.exe"),
         "keep_steam_appid": keep_steam_appid,
         "openal_override": str(openal_override) if openal_override is not None else None,
+        "windows_exe_icon": str(exe_icon_path) if exe_icon_path is not None else None,
+        "windows_exe_icon_tool": str(exe_icon_tool) if exe_icon_tool is not None else None,
+        "windows_exe_icon_status": exe_icon_status,
         "required_love_runtime_files": REQUIRED_LOVE_RUNTIME_FILES,
         "required_external_package_files": REQUIRED_EXTERNAL_PACKAGE_FILES,
         "validation": validation,
@@ -412,6 +478,10 @@ def main() -> int:
         inside_files, beside_files = collect_source_file_sets(source_root)
         version = parse_version(source_root)
 
+    asset_root = prep_root if prep_root is not None else source_root
+    exe_icon_path = resolve_optional_windows_exe_icon(asset_root) if asset_root is not None else None
+    exe_icon_tool = resolve_optional_windows_icon_tool(asset_root) if asset_root is not None else None
+
     target_root = pick_target_folder(output_parent, f"MeowOverMoo_WindowsPackage_{version}")
     package_root = target_root / "game"
     build_root = target_root / "_build"
@@ -422,7 +492,15 @@ def main() -> int:
     else:
         build_love_archive_from_files(source_root, inside_files, love_archive)
     package_root.mkdir(parents=True, exist_ok=True)
-    fuse_executable(runtime_root / "love.exe", love_archive, package_root / "MOM.exe")
+
+    # Apply any optional Windows icon replacement before fusing the LOVE archive.
+    # Resource editors can rewrite the executable and strip appended payload data,
+    # so doing it after fusion can turn MOM.exe back into a bare LOVE runtime.
+    staged_love_exe = build_root / "love_staged.exe"
+    shutil.copy2(runtime_root / "love.exe", staged_love_exe)
+    _, exe_icon_status = try_apply_windows_exe_icon(staged_love_exe, exe_icon_path, exe_icon_tool)
+    fuse_executable(staged_love_exe, love_archive, package_root / "MOM.exe")
+
     copy_runtime_dlls(runtime_root, package_root, openal_override)
     if prep_root is not None:
         copy_tree_contents(beside_root, package_root)
@@ -443,10 +521,10 @@ def main() -> int:
         create_zip_archive(package_root, zip_path)
 
     summary_source = prep_root if prep_root is not None else source_root
-    write_text(target_root / "BUILD_SUMMARY.txt", build_summary(summary_source, runtime_root, package_root, not args.strip_steam_appid, validation, openal_override))
+    write_text(target_root / "BUILD_SUMMARY.txt", build_summary(summary_source, runtime_root, package_root, not args.strip_steam_appid, validation, openal_override, exe_icon_status, exe_icon_path, exe_icon_tool))
     write_text(target_root / "VALIDATION_REPORT.txt", build_validation_report(validation))
     write_text(target_root / "STEAM_UPLOAD_INSTRUCTIONS.txt", build_upload_instructions(package_root, zip_path))
-    write_manifest(summary_source, runtime_root, package_root, love_archive, not args.strip_steam_appid, validation, openal_override)
+    write_manifest(summary_source, runtime_root, package_root, love_archive, not args.strip_steam_appid, validation, openal_override, exe_icon_status, exe_icon_path, exe_icon_tool)
 
     if not validation["ok"]:
         print(str(target_root))
@@ -459,6 +537,7 @@ def main() -> int:
     print(str(target_root))
     print(f"package={package_root}")
     print("validation=OK")
+    print(f"exe_icon_status={exe_icon_status}")
     if zip_path is not None:
         print(f"zip={zip_path}")
     return 0

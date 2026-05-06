@@ -35,6 +35,12 @@ local BUTTON_CLICK_SOUND_PATH = "assets/audio/GenericButton6.wav"
 local SCENARIO_PROGRESS_FILE = "ScenarioProgress.dat"
 local SCENARIO_PROGRESS_VERSION = 1
 local SCENARIO_SCRIPTS_DIR = "scenarios"
+local SCENARIO_EDITOR_FEATURE_ENABLED = SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_EDITOR == true
+local DEFAULT_SCENARIO_CREATED_BY = "Flippet Cat"
+local PROMOTED_SCENARIO_STATUSES = {
+    APPROVED = true,
+    PROMOTED = true
+}
 
 runtimeProgressData = {
     version = SCENARIO_PROGRESS_VERSION,
@@ -61,10 +67,140 @@ local SCENARIO_DEFINITIONS = {
     {
         id = "P001",
         name = "Scenario P001",
-        status = "READY",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "verified_export_promoted_to_public_slot"
+        },
         file = "scenarios/P001.lua"
+    },
+    {
+        id = "P002",
+        name = "Scenario P002",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "scenario_editor_manual_export_promoted_to_public_slot",
+            originalExportId = "Scenario#20260505171632-565"
+        },
+        file = "scenarios/P002.lua"
+    },
+    {
+        id = "P003",
+        name = "Scenario P003",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_breach_doubt_candidate"
+        },
+        file = "scenarios/P003.lua"
+    },
+    {
+        id = "P004",
+        name = "Scenario P004",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_790_promoted"
+        },
+        file = "scenarios/P004.lua"
+    },
+    {
+        id = "P005",
+        name = "Scenario P005",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_artillery_extraction"
+        },
+        file = "scenarios/P005.lua"
+    },
+    {
+        id = "P006",
+        name = "Scenario P006",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_bastion_siege_walk"
+        },
+        file = "scenarios/P006.lua"
+    },
+    {
+        id = "P007",
+        name = "Scenario P007",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_shutter_shot"
+        },
+        file = "scenarios/P007.lua"
+    },
+    {
+        id = "P008",
+        name = "Scenario P008",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_crossfire_relay"
+        },
+        file = "scenarios/P008.lua"
+    },
+    {
+        id = "P009",
+        name = "Scenario P009",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_capture_ladder"
+        },
+        file = "scenarios/P009.lua"
+    },
+    {
+        id = "P010",
+        name = "Scenario P010",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_gate_march"
+        },
+        file = "scenarios/P010.lua"
     }
 }
+
+local function normalizePromotionStatus(value)
+    return tostring(value or ""):upper()
+end
+
+local function isPromotedScenarioPayload(payload)
+    if type(payload) ~= "table" then
+        return false
+    end
+
+    if PROMOTED_SCENARIO_STATUSES[normalizePromotionStatus(payload.status)] then
+        return true
+    end
+
+    local promotion = payload.promotion
+    if type(promotion) ~= "table" then
+        return false
+    end
+
+    if promotion.approved == true then
+        return true
+    end
+
+    return PROMOTED_SCENARIO_STATUSES[normalizePromotionStatus(promotion.state or promotion.status)] == true
+end
 
 local function cloneSequence(source)
     local out = {}
@@ -102,6 +238,21 @@ local function normalizeScenarioId(rawId, fallback)
     local value = tostring(rawId or fallback or "")
     value = value:gsub("^%s+", ""):gsub("%s+$", "")
     return value
+end
+
+local function buildPlayableScenarioRedPolicyConfig(rawConfig, scenarioId)
+    local config = type(rawConfig) == "table" and cloneValue(rawConfig) or {}
+    config.runtime = config.runtime or "scenarioRedRuntime"
+    config.policy = config.policy or "scenarioRedPolicy"
+    config.policyVersion = config.policyVersion or "scenario_red_policy.v1"
+    config.seed = config.seed or scenarioId or "scenario"
+    if type(config.requiredCells) ~= "table" then
+        config.requiredCells = {}
+    end
+    if type(config.criticalBlueUnitIds) ~= "table" then
+        config.criticalBlueUnitIds = {}
+    end
+    return config
 end
 
 local function scenarioFileStem(path)
@@ -194,6 +345,7 @@ local function normalizeScenarioScriptPayload(payload, path)
 
     local name = payload.name or payload.title or scenarioId
     local status = payload.status or "READY"
+    local createdBy = payload.createdBy or payload.creator or payload.author or DEFAULT_SCENARIO_CREATED_BY
     local objectiveMessage = payload.objectiveMessage or payload.objectiveText
     local objectiveType = payload.objectiveType
     local sideToMove = payload.sideToMove
@@ -202,11 +354,15 @@ local function normalizeScenarioScriptPayload(payload, path)
         id = scenarioId,
         name = tostring(name),
         status = tostring(status),
+        createdBy = tostring(createdBy),
         turnsTarget = turnsTarget,
         objectiveMessage = objectiveMessage and tostring(objectiveMessage) or nil,
         objectiveText = payload.objectiveText and tostring(payload.objectiveText) or nil,
         objectiveType = objectiveType and tostring(objectiveType) or nil,
         sideToMove = sideToMove and tostring(sideToMove) or nil,
+        promotion = type(payload.promotion) == "table" and cloneValue(payload.promotion) or nil,
+        dossierPath = payload.dossierPath and tostring(payload.dossierPath) or nil,
+        scenarioRedPolicy = type(payload.scenarioRedPolicy) == "table" and cloneValue(payload.scenarioRedPolicy) or nil,
         snapshot = cloneValue(snapshot),
         sourcePath = path
     }, nil
@@ -580,7 +736,8 @@ local function decodeProgress(content)
 end
 
 local function loadProgressData()
-    runtimeProgressData = runtimeProgressData or {
+    local persisted = decodeProgress(readRawProgress())
+    runtimeProgressData = type(persisted) == "table" and persisted or runtimeProgressData or {
         version = SCENARIO_PROGRESS_VERSION,
         scenarios = {}
     }
@@ -598,7 +755,7 @@ local function saveProgressData(data)
     data.version = SCENARIO_PROGRESS_VERSION
     data.scenarios = type(data.scenarios) == "table" and data.scenarios or {}
     runtimeProgressData = data
-    return true
+    return writeRawProgress(encodeProgress(data))
 end
 
 local function getScenarioProgressEntry(scenarioId)
@@ -627,6 +784,9 @@ local function buildScenarioRows()
         if type(rowData) ~= "table" then
             return
         end
+        if not isPromotedScenarioPayload(rowData) then
+            return
+        end
         local scenarioId = normalizeScenarioId(rowData.id, nil)
         if scenarioId == "" or seenIds[scenarioId] then
             return
@@ -637,6 +797,7 @@ local function buildScenarioRows()
             id = scenarioId,
             name = tostring(rowData.name or "Unnamed Scenario"),
             status = tostring(rowData.status or "READY"),
+            createdBy = tostring(rowData.createdBy or DEFAULT_SCENARIO_CREATED_BY),
             turnsTarget = math.max(0, tonumber(rowData.turnsTarget) or 0),
             attempts = progressEntry.attempts,
             solved = progressEntry.solved,
@@ -644,12 +805,18 @@ local function buildScenarioRows()
             objectiveText = rowData.objectiveText,
             objectiveType = rowData.objectiveType,
             sideToMove = rowData.sideToMove,
+            promotion = type(rowData.promotion) == "table" and cloneValue(rowData.promotion) or nil,
+            dossierPath = rowData.dossierPath,
+            scenarioRedPolicy = type(rowData.scenarioRedPolicy) == "table" and cloneValue(rowData.scenarioRedPolicy) or nil,
             sourcePath = rowData.sourcePath
         }
 
         scenarioLoadedDefinitionsById[scenarioId] = {
             id = scenarioId,
             snapshot = type(rowData.snapshot) == "table" and cloneValue(rowData.snapshot) or nil,
+            promotion = type(rowData.promotion) == "table" and cloneValue(rowData.promotion) or nil,
+            dossierPath = rowData.dossierPath,
+            scenarioRedPolicy = type(rowData.scenarioRedPolicy) == "table" and cloneValue(rowData.scenarioRedPolicy) or nil,
             sourcePath = rowData.sourcePath
         }
         seenIds[scenarioId] = true
@@ -667,6 +834,12 @@ local function buildScenarioRows()
                     end
                     if definition.status and tostring(definition.status) ~= "" then
                         normalized.status = tostring(definition.status)
+                    end
+                    if definition.createdBy and tostring(definition.createdBy) ~= "" then
+                        normalized.createdBy = tostring(definition.createdBy)
+                    end
+                    if type(definition.promotion) == "table" then
+                        normalized.promotion = cloneValue(definition.promotion)
                     end
                     registerLoadedScenario(normalized)
                 else
@@ -690,11 +863,15 @@ local function buildScenarioRows()
                         id = scenarioId,
                         name = definition.name or scenarioId,
                         status = definition.status or "READY",
+                        createdBy = definition.createdBy or DEFAULT_SCENARIO_CREATED_BY,
                         turnsTarget = definition.turnsTarget,
                         objectiveMessage = definition.objectiveMessage,
                         objectiveText = definition.objectiveText,
                         objectiveType = definition.objectiveType,
                         sideToMove = definition.sideToMove,
+                        promotion = definition.promotion,
+                        dossierPath = definition.dossierPath,
+                        scenarioRedPolicy = definition.scenarioRedPolicy,
                         snapshot = snapshot,
                         sourcePath = definition.file
                     })
@@ -964,10 +1141,53 @@ local function activateScenario(index)
     end
     setSelectedRowIndex(index)
     listFocus = true
-    setStatusBar(
-        string.format("%s selected. Scenario runtime is disabled (UI-only mode). Open EDITOR to continue.", row.name),
-        "warn"
-    )
+
+    local snapshot, snapshotErr = buildScenarioSnapshot(row.id)
+    if type(snapshot) ~= "table" then
+        setStatusBar("Scenario could not be loaded: " .. tostring(snapshotErr or "unknown"), "error")
+        return
+    end
+
+    if GAME and type(GAME.resetToDefaultControllers) == "function" then
+        GAME.resetToDefaultControllers()
+    end
+
+    local turnsTarget = math.max(1, math.floor(tonumber(row.turnsTarget) or tonumber(snapshot.turnLimitRounds) or 3))
+    local objectiveText = row.objectiveText
+        or row.objectiveMessage
+        or ("Blue to move. Destroy the enemy Commandant within " .. tostring(turnsTarget) .. " turns.")
+
+    GAME.CURRENT.SCENARIO = {
+        id = row.id,
+        name = row.name,
+        status = row.status,
+        createdBy = row.createdBy or DEFAULT_SCENARIO_CREATED_BY,
+        solved = row.solved == true,
+        attempts = math.max(0, tonumber(row.attempts) or 0) + 1,
+        turnsTarget = turnsTarget,
+        objectiveMessage = objectiveText,
+        objectiveText = objectiveText,
+        objectiveType = row.objectiveType or "destroy_commandant",
+        sideToMove = row.sideToMove or "Blue",
+        sourcePath = row.sourcePath,
+        promotion = type(row.promotion) == "table" and cloneValue(row.promotion) or nil,
+        dossierPath = row.dossierPath,
+        scenarioRedPolicy = buildPlayableScenarioRedPolicyConfig(row.scenarioRedPolicy, row.id),
+        snapshot = snapshot
+    }
+    GAME.CURRENT.SCENARIO_RESULT = nil
+    GAME.CURRENT.SCENARIO_RETURN_STATE = "scenarioSelect"
+    GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
+    GAME.CURRENT.MODE = GAME.MODE.SCENARIO
+    GAME.CURRENT.LOCAL_MATCH_VARIANT = "couch"
+    GAME.CURRENT.PENDING_RESUME_SNAPSHOT = nil
+    GAME.CURRENT.RESUME_RESTART_NOTICE = nil
+
+    clearOnlineRuntime()
+    setStatusBar(string.format("Loading %s with Scenario Red Policy.", row.name), "ok")
+    if stateMachineRef and stateMachineRef.changeState then
+        stateMachineRef.changeState("scenarioGameplay")
+    end
 end
 
 local function onBack()
@@ -977,6 +1197,10 @@ local function onBack()
 end
 
 local function onEditor()
+    if not SCENARIO_EDITOR_FEATURE_ENABLED then
+        return
+    end
+
     if stateMachineRef then
         stateMachineRef.changeState("scenarioEditor")
     end
@@ -999,8 +1223,9 @@ local function triggerSelectedButton(button)
 end
 
 local function initializeButtons()
-    local gap = 24
-    local totalWidth = (LAYOUT.buttonWidth * 2) + gap
+    local gap = SCENARIO_EDITOR_FEATURE_ENABLED and 24 or 0
+    local buttonCount = SCENARIO_EDITOR_FEATURE_ENABLED and 2 or 1
+    local totalWidth = (LAYOUT.buttonWidth * buttonCount) + (gap * math.max(0, buttonCount - 1))
     local startX = math.floor((SETTINGS.DISPLAY.WIDTH - totalWidth) / 2)
     uiButtons = {
         back = {
@@ -1013,8 +1238,12 @@ local function initializeButtons()
             currentColor = uiTheme.COLORS.button,
             hoverColor = uiTheme.COLORS.buttonHover,
             pressedColor = uiTheme.COLORS.buttonPressed
-        },
-        editor = {
+        }
+    }
+
+    buttonOrder = {uiButtons.back}
+    if SCENARIO_EDITOR_FEATURE_ENABLED then
+        uiButtons.editor = {
             x = startX + LAYOUT.buttonWidth + gap,
             y = LAYOUT.buttonRowY,
             width = LAYOUT.buttonWidth,
@@ -1025,9 +1254,9 @@ local function initializeButtons()
             hoverColor = uiTheme.COLORS.buttonHover,
             pressedColor = uiTheme.COLORS.buttonPressed
         }
-    }
+        buttonOrder[#buttonOrder + 1] = uiButtons.editor
+    end
 
-    buttonOrder = {uiButtons.back, uiButtons.editor}
     for _, button in ipairs(buttonOrder) do
         uiTheme.applyButtonVariant(button, "default")
     end
@@ -1045,7 +1274,7 @@ function scenarioSelect.enter(stateMachine)
     lastHoveredTarget = nil
 
     progressData = loadProgressData()
-    consumePendingScenarioResult()
+    applyPendingScenarioResult(consumePendingScenarioResult())
     buildScenarioRows()
     clampSelection()
 
@@ -1053,7 +1282,8 @@ function scenarioSelect.enter(stateMachine)
         listFocus = false
         setStatusBar("No scenarios available.", "warn")
     else
-        setStatusBar("UI-only mode: select a scenario or open EDITOR.", "info")
+        local prompt = SCENARIO_EDITOR_FEATURE_ENABLED and "Select a scenario to play, or open EDITOR." or "Select a scenario to play."
+        setStatusBar(prompt, "info")
     end
 
     updateButtonStates()
@@ -1096,7 +1326,7 @@ function scenarioSelect.draw()
     love.graphics.setColor(0.90, 0.88, 0.82, 1)
     love.graphics.printf("AVAILABLE SCENARIOS", topPanelX + 12, topPanelY + 10, topPanelW - 24, "left")
     love.graphics.setColor(0.78, 0.82, 0.86, 1)
-    love.graphics.printf(string.format("Solved senario %d/%d", solvedCount, #scenarioRows), topPanelX + 12, topPanelY + 42, topPanelW - 24, "left")
+    love.graphics.printf(string.format("Solved scenario %d/%d", solvedCount, #scenarioRows), topPanelX + 12, topPanelY + 42, topPanelW - 24, "left")
 
     local panelX, panelY, panelW, panelH = listRect()
     uiTheme.drawTechPanel(panelX, panelY, panelW, panelH)
@@ -1108,10 +1338,10 @@ function scenarioSelect.draw()
     local rowsTopY = contentY + LAYOUT.listColumnsHeaderHeight
 
     local colName = math.floor(contentW * 0.34)
-    local colStatus = math.floor(contentW * 0.14)
+    local colCreatedBy = math.floor(contentW * 0.16)
     local colSolved = math.floor(contentW * 0.16)
-    local colAttempts = math.floor(contentW * 0.20)
-    local colTurns = contentW - (colName + colStatus + colSolved + colAttempts)
+    local colAttempts = math.floor(contentW * 0.18)
+    local colTurns = contentW - (colName + colCreatedBy + colSolved + colAttempts)
 
     love.graphics.setColor(0.15, 0.16, 0.18, 0.5)
     love.graphics.rectangle("fill", contentX, contentY, contentW, contentH)
@@ -1120,10 +1350,10 @@ function scenarioSelect.draw()
     love.graphics.rectangle("fill", contentX, contentY, contentW, LAYOUT.listColumnsHeaderHeight)
     love.graphics.setColor(0.76, 0.78, 0.82, 1)
     love.graphics.printf("Name", contentX + 8, contentY + 4, colName - 10, "left")
-    love.graphics.printf("Status", contentX + colName + 6, contentY + 4, colStatus - 10, "left")
-    love.graphics.printf("Solved", contentX + colName + colStatus + 6, contentY + 4, colSolved - 10, "left")
-    love.graphics.printf("Attempts", contentX + colName + colStatus + colSolved + 6, contentY + 4, colAttempts - 10, "left")
-    love.graphics.printf("Turns", contentX + colName + colStatus + colSolved + colAttempts + 6, contentY + 4, colTurns - 10, "left")
+    love.graphics.printf("Created by", contentX + colName + 6, contentY + 4, colCreatedBy - 10, "left")
+    love.graphics.printf("Solved", contentX + colName + colCreatedBy + 6, contentY + 4, colSolved - 10, "left")
+    love.graphics.printf("Attempts", contentX + colName + colCreatedBy + colSolved + 6, contentY + 4, colAttempts - 10, "left")
+    love.graphics.printf("Turns", contentX + colName + colCreatedBy + colSolved + colAttempts + 6, contentY + 4, colTurns - 10, "left")
 
     if #scenarioRows == 0 then
         love.graphics.setColor(0.72, 0.70, 0.66, 1)
@@ -1155,10 +1385,10 @@ function scenarioSelect.draw()
 
             love.graphics.setColor(0.94, 0.92, 0.86, 1)
             love.graphics.printf(row.name, contentX + 8, rowY + 9, colName - 10, "left")
-            love.graphics.printf(row.status, contentX + colName + 6, rowY + 9, colStatus - 10, "left")
-            love.graphics.printf(solvedText, contentX + colName + colStatus + 6, rowY + 9, colSolved - 10, "left")
-            love.graphics.printf(attemptsText, contentX + colName + colStatus + colSolved + 6, rowY + 9, colAttempts - 10, "left")
-            love.graphics.printf(turnsText, contentX + colName + colStatus + colSolved + colAttempts + 6, rowY + 9, colTurns - 10, "left")
+            love.graphics.printf(row.createdBy or DEFAULT_SCENARIO_CREATED_BY, contentX + colName + 6, rowY + 9, colCreatedBy - 10, "left")
+            love.graphics.printf(solvedText, contentX + colName + colCreatedBy + 6, rowY + 9, colSolved - 10, "left")
+            love.graphics.printf(attemptsText, contentX + colName + colCreatedBy + colSolved + 6, rowY + 9, colAttempts - 10, "left")
+            love.graphics.printf(turnsText, contentX + colName + colCreatedBy + colSolved + colAttempts + 6, rowY + 9, colTurns - 10, "left")
 
             love.graphics.setColor(1, 1, 1, 0.08)
             love.graphics.rectangle("fill", contentX + 2, rowY + LAYOUT.rowHeight - 1, contentW - 4, 1)

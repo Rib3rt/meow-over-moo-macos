@@ -1,7 +1,7 @@
 # Steam Graphics Production Board
 
-Update: 2026-04-13  
-Status: Completed for current non-puzzle release baseline.
+Update: 2026-05-06  
+Status: Completed for the current market release baseline, including Scenario Mode puzzle content.
 
 ## Priority 1 - Store Core Assets
 
@@ -33,6 +33,7 @@ Status: Completed for current non-puzzle release baseline.
 | Gameplay screenshots | 6-10 | Live captures | approved |
 | Online screenshot | 1+ | Live capture | approved |
 | Local multiplayer screenshot | 1+ | Live capture | approved |
+| Scenario Mode screenshot | 1+ | Live capture from promoted puzzle list/runtime | approved |
 | Codex screenshot | 1+ | Live capture | approved |
 | Game over / rating screenshot | 1+ | Live capture | approved |
 

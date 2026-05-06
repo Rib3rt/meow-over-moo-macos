@@ -1,14 +1,14 @@
-# Steam Deck Verification Audit (2026-03-04)
+# Steam Deck Verification Audit (updated 2026-05-06)
 
 ## Scope
 - Project: `/Users/mdc/Documents/MeowOverMoo`
-- Runtime target: LOVE 11.5 + Steam AppID `480`
+- Runtime target: LOVE 11.5 + Steam AppID `1573941`
 - Basis: Steamworks compatibility categories (Input, Display, Seamlessness, System Support)
 - Evidence source for this audit: code inspection + smoke checks in current branch
 
 ## Verdict
-- **Current predicted class: Stable release-ready baseline.**
-- Core controller support, online flow, readability, and suspend/resume validation are considered complete for this release cycle.
+- **Current predicted class: Stable market release-ready baseline.**
+- Core controller support, online flow, Scenario Mode flow, readability, and suspend/resume validation are considered complete for this release cycle.
 
 ## Category Results
 
@@ -21,14 +21,14 @@
   - Online non-local turn gating and surrender exception are now explicit in `/Users/mdc/Documents/MeowOverMoo/gameplay.lua` and `/Users/mdc/Documents/MeowOverMoo/uiClass.lua`.
   - Steam achievements/stats backend plumbing now exists, so later achievement work will not require backend redesign.
 - Open checks:
-  - None pending for the current release baseline.
+  - None pending for the current market baseline.
 
 ### 2) Display
 - Status: **Partial Pass**
 - Evidence:
   - UI is scaled through existing display scaling pipeline and button rows are now role-aware and reflowed in `/Users/mdc/Documents/MeowOverMoo/factionSelect.lua` and `/Users/mdc/Documents/MeowOverMoo/onlineLobby.lua`.
 - Open checks:
-  - None pending for the current release baseline.
+  - None pending for the current market baseline.
 
 ### 3) Seamlessness
 - Status: **Partial Pass**
@@ -38,7 +38,7 @@
   - Remote Play cursor handling now uses Steam per-session APIs and is driven by actual remote mouse use rather than turn authority.
   - App-side audio diagnostics now track whether host audio is actually emitting during Remote Play sessions and explicitly resume audio on focus/visibility regain.
 - Open checks:
-  - None pending for the current release baseline.
+  - None pending for the current market baseline.
 
 ### 4) System Support
 - Status: **Pass (Provisional)**
@@ -47,10 +47,10 @@
   - Steam runtime integration path exists and degrades safely when unavailable.
   - Fused Windows-under-Proton save/log expectation is `AppData/Roaming/MeowOverMoo`, not `AppData/Roaming/LOVE/MeowOverMoo`, matching LOVE fused-build behavior.
 - Open checks:
-  - None pending for the current release baseline.
+  - None pending for the current market baseline.
 
 ## Blockers Before Requesting Verified Review
-1. None for the current release baseline.
+1. None for the current market baseline.
 
 ## Recommended Verification Test Matrix
 1. Boot -> main menu -> online lobby -> invite join -> faction select -> full match -> game over.
@@ -59,6 +59,7 @@
 4. Mid-game surrender on local turn and remote turn.
 5. Suspend/resume at lobby, faction select, and gameplay.
 6. Touch + controller mixed input without focus loss.
+7. Scenario Mode list -> scenario gameplay -> result -> persisted progress on Deck.
 
 ## Exit Criteria for "Verified-likely"
 1. All matrix cases pass on real Deck: complete.

@@ -195,8 +195,8 @@ Avoid these unless they are truly central to the game:
 - publish achievements
 - create the rating leaderboard
 - publish leaderboard
-- enable Steam Cloud for `OnlineRatingProfile.dat` if desired
-- later replace `480` with the real app config
+- enable Steam Cloud for `OnlineRatingProfile.dat` and `ScenarioProgress.dat`
+- use the real app config (`1573941`) for the market build
 - run final PC + Steam Deck validation
 
 ## Best Final Store Package

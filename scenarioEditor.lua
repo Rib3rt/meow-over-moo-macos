@@ -20,8 +20,11 @@ local lastHoveredTarget = nil
 local selectedCell = { row = 1, col = 1 }
 local selectedUnitIndex = nil
 
-local scenarioCode = "P001"
-local scenarioRoundLimit = 3
+local DEFAULT_EDITOR_SCENARIO_CODE = "P010"
+local DEFAULT_EDITOR_ROUND_LIMIT = 5
+
+local scenarioCode = DEFAULT_EDITOR_SCENARIO_CODE
+local scenarioRoundLimit = DEFAULT_EDITOR_ROUND_LIMIT
 local scenarioTagIndex = 2
 local scenarioComplexityIndex = 3
 
@@ -32,10 +35,31 @@ local editorUnits = {}
 local editorLogLines = {}
 local unitSpriteCache = {}
 local editorInitialized = false
+local editorDefaultPresetKey = nil
 local editorScenarioAttempts = 0
+local editorGeneratedDossier = nil
+local editorGeneratedQuality = nil
+local editorBoardDirtySinceDossier = false
+local editorBoardDirtyReason = nil
+local scenarioExportCounter = 0
+local editorGenerationJob = nil
+local editorGenerationSerial = 0
 
 local statusText = "Editor ready."
 local statusSeverity = "info"
+local getUnitBaseHp
+local selectCell
+
+local SCENARIO_RUNTIME_ACTION_BUDGET = 2
+local SCENARIO_DOSSIER_DIR = "scenario_dossiers"
+local SCENARIO_SOLUTION_DIR = "scenario_solutions"
+local SCENARIO_EXPORT_STATUS = "PROMOTED"
+local SCENARIO_NEW_GENERATOR_MAX_ATTEMPTS = 48
+local SCENARIO_NEW_GENERATOR_SOLVER_MAX_NODES = 9000
+local SCENARIO_GENERATION_WORKER_PATH = "scenario_tooling/editor_generation_worker.lua"
+local generatorArchetypes = {
+    { archetype = "support_intercepts_finisher_threat_artillery_finish", label = "Support intercepts artillery" }
+}
 
 local BUTTON_BEEP_SOUND_PATH = "assets/audio/GenericButton14.wav"
 local BUTTON_CLICK_SOUND_PATH = "assets/audio/GenericButton6.wav"
@@ -80,6 +104,54 @@ local function cloneMap(source)
     local out = {}
     for key, value in pairs(source or {}) do
         out[key] = value
+    end
+    return out
+end
+
+local function canonicalExportAction(action)
+    if type(action) ~= "table" then
+        return nil
+    end
+
+    local actionType = action.type
+    if actionType == nil then
+        return nil
+    end
+
+    local out = {
+        type = actionType,
+        actorId = action.actorId,
+        targetId = action.targetId,
+        id = action.id
+    }
+    if type(action.from) == "table" then
+        out.from = {
+            row = tonumber(action.from.row),
+            col = tonumber(action.from.col)
+        }
+    end
+    if type(action.to) == "table" then
+        out.to = {
+            row = tonumber(action.to.row),
+            col = tonumber(action.to.col)
+        }
+    end
+    if type(action.targetCell) == "table" then
+        out.targetCell = {
+            row = tonumber(action.targetCell.row),
+            col = tonumber(action.targetCell.col)
+        }
+    end
+    return out
+end
+
+local function canonicalExportActionList(actions)
+    local out = {}
+    for _, action in ipairs(actions or {}) do
+        local canonical = canonicalExportAction(action)
+        if canonical then
+            out[#out + 1] = canonical
+        end
     end
     return out
 end
@@ -218,6 +290,101 @@ local function appendLog(line)
     end
 end
 
+local function markEditorBoardDirty(reason)
+    if editorGeneratedDossier == nil then
+        return
+    end
+
+    editorBoardDirtySinceDossier = true
+    editorBoardDirtyReason = tostring(reason or "manual_edit")
+end
+
+local function scenarioTrace(scope, message)
+    print("[SCENARIO_TRACE][" .. tostring(scope or "Editor") .. "] " .. tostring(message or ""))
+end
+
+local function countUnitGroups(units)
+    local counts = {
+        total = 0,
+        blue = 0,
+        red = 0,
+        neutral = 0,
+        redCommandants = 0,
+        activeRed = 0
+    }
+    for _, unit in ipairs(units or {}) do
+        local player = tonumber(unit.player)
+        local name = tostring(unit.name or "")
+        counts.total = counts.total + 1
+        if player == 1 then
+            counts.blue = counts.blue + 1
+        elseif player == 2 then
+            counts.red = counts.red + 1
+            if name == "Commandant" then
+                counts.redCommandants = counts.redCommandants + 1
+            else
+                counts.activeRed = counts.activeRed + 1
+            end
+        else
+            counts.neutral = counts.neutral + 1
+        end
+    end
+    return counts
+end
+
+local function traceUnitList(scope, label, units)
+    local counts = countUnitGroups(units)
+    scenarioTrace(scope, string.format(
+        "%s count=%d blue=%d red=%d activeRed=%d redCommandants=%d neutral=%d",
+        tostring(label),
+        counts.total,
+        counts.blue,
+        counts.red,
+        counts.activeRed,
+        counts.redCommandants,
+        counts.neutral
+    ))
+    for index, unit in ipairs(units or {}) do
+        scenarioTrace(scope, string.format(
+            "%s[%d] id=%s name=%s player=%s cell=%s,%s hp=%s/%s acted=%s",
+            tostring(label),
+            index,
+            tostring(unit.scenarioUnitId or unit.id or ""),
+            tostring(unit.name or ""),
+            tostring(unit.player or ""),
+            tostring(unit.row or ""),
+            tostring(unit.col or ""),
+            tostring(unit.currentHp or unit.hp or ""),
+            tostring(unit.startingHp or ""),
+            tostring(unit.hasActed or unit.acted or false)
+        ))
+    end
+end
+
+local function traceScenarioPolicyConfig(scope, label, config)
+    config = type(config) == "table" and config or {}
+    scenarioTrace(scope, string.format(
+        "%s seed=%s requiredCells=%d criticalBlueUnitIds=%d",
+        tostring(label),
+        tostring(config.seed or ""),
+        #(config.requiredCells or {}),
+        #(config.criticalBlueUnitIds or {})
+    ))
+end
+
+local function traceGeneratedDossier(seed, dossier, quality)
+    scenarioTrace("Editor", string.format(
+        "new_scenario.result seed=%s id=%s pipeline=%s quality=%s proof=%s falseLines=%d",
+        tostring(seed),
+        tostring(dossier and dossier.id or ""),
+        tostring(dossier and dossier.pipelineState or ""),
+        tostring(quality and quality.status or ""),
+        tostring(dossier and dossier.solverProof and dossier.solverProof.status or ""),
+        #(dossier and dossier.falseLines or {})
+    ))
+    traceUnitList("Editor", "generated_state.units", dossier and dossier.scenarioState and dossier.scenarioState.units or {})
+end
+
 local function computeScenarioIntegritySignature(boardUnits)
     local signature = {
         boardUnitTotal = 0,
@@ -239,6 +406,24 @@ local function computeScenarioIntegritySignature(boardUnits)
     end
 
     return signature
+end
+
+local function makeScenarioUnitId(unit, index)
+    local player = tonumber(unit and unit.player) or 0
+    if player ~= 1 and player ~= 2 then
+        player = 0
+    end
+    local name = tostring(unit and unit.name or "unit"):gsub("%W+", "_"):lower()
+    local row = math.floor(tonumber(unit and unit.row) or 0)
+    local col = math.floor(tonumber(unit and unit.col) or 0)
+    return table.concat({
+        "editor",
+        tostring(player),
+        name,
+        tostring(row),
+        tostring(col),
+        tostring(index or 0)
+    }, "_")
 end
 
 local function normalizeScenarioCode(rawCode)
@@ -286,16 +471,300 @@ end
 
 local function buildDefaultEditorUnits()
     return {
-        {name = "Commandant", player = 2, row = 2, col = 2, hp = 6},
-        {name = "Bastion", player = 2, row = 2, col = 4, hp = 6},
-        {name = "Wingstalker", player = 2, row = 3, col = 4, hp = 3},
-        {name = "Artillery", player = 2, row = 3, col = 5, hp = 5},
-        {name = "Crusher", player = 2, row = 5, col = 4, hp = 4},
-        {name = "Artillery", player = 1, row = 6, col = 2, hp = 3},
-        {name = "Wingstalker", player = 1, row = 6, col = 3, hp = 2},
-        {name = "Crusher", player = 1, row = 6, col = 5, hp = 4},
-        {name = "Cloudstriker", player = 1, row = 6, col = 6, hp = 4}
+        {scenarioUnitId = "blue_breaker", name = "Artillery", player = 1, row = 8, col = 4, hp = 5},
+        {scenarioUnitId = "blue_finisher", name = "Cloudstriker", player = 1, row = 1, col = 8, hp = 4},
+        {scenarioUnitId = "blue_decoy", name = "Bastion", player = 1, row = 4, col = 6, hp = 2},
+        {scenarioUnitId = "blue_screen", name = "Wingstalker", player = 1, row = 8, col = 5, hp = 3},
+        {scenarioUnitId = "red_commandant", name = "Commandant", player = 2, row = 1, col = 2, hp = 3},
+        {scenarioUnitId = "neutral_gate", name = "Rock", player = 0, row = 1, col = 4, hp = 2},
+        {scenarioUnitId = "neutral_screen", name = "Rock", player = 0, row = 3, col = 5, hp = 5},
+        {scenarioUnitId = "red_hunter", name = "Crusher", player = 2, row = 7, col = 5, hp = 4},
+        {scenarioUnitId = "red_sniper", name = "Cloudstriker", player = 2, row = 4, col = 5, hp = 3}
     }
+end
+
+local function buildDefaultEditorPresetKey()
+    local parts = {
+        normalizeScenarioCode(scenarioCode),
+        tostring(math.max(1, math.floor(tonumber(scenarioRoundLimit) or 1)))
+    }
+    local defaults = buildDefaultEditorUnits()
+    for _, unit in ipairs(defaults) do
+        parts[#parts + 1] = table.concat({
+            tostring(unit.scenarioUnitId or ""),
+            tostring(unit.name or ""),
+            tostring(unit.player or ""),
+            tostring(unit.row or ""),
+            tostring(unit.col or ""),
+            tostring(unit.hp or "")
+        }, ":")
+    end
+    return table.concat(parts, "|")
+end
+
+local function nextGeneratedScenarioSeed()
+    local base = os.time and os.time() or 1
+    local unitFactor = (#editorUnits + 1) * 97
+    local roundFactor = math.max(1, math.floor(tonumber(scenarioRoundLimit) or 3)) * 131
+    local serialFactor = math.max(1, editorGenerationSerial) * 1000003
+    local timerFactor = 0
+    if love and love.timer and type(love.timer.getTime) == "function" then
+        timerFactor = math.floor((love.timer.getTime() * 1000000) % 1000000)
+    end
+    return math.max(1, math.floor(base + unitFactor + roundFactor + serialFactor + timerFactor))
+end
+
+local function isGenerationActive()
+    return type(editorGenerationJob) == "table" and editorGenerationJob.active == true
+end
+
+local function randomGeneratorIndex(maxValue)
+    maxValue = math.max(1, math.floor(tonumber(maxValue) or 1))
+    if love and love.math and type(love.math.random) == "function" then
+        local ok, value = pcall(love.math.random, maxValue)
+        if ok and tonumber(value) then
+            return math.max(1, math.min(maxValue, math.floor(value)))
+        end
+    end
+    return math.max(1, math.min(maxValue, math.floor(math.random(maxValue))))
+end
+
+local function generatorProfileForAttempt(job)
+    local count = #generatorArchetypes
+    if count <= 0 then
+        return nil, 0
+    end
+    local startIndex = math.max(1, math.floor(tonumber(job and job.profileStartIndex) or 1))
+    local attempt = math.max(1, math.floor(tonumber(job and job.attempt) or 1))
+    local index = ((startIndex + attempt - 2) % count) + 1
+    return generatorArchetypes[index], index
+end
+
+local function hasActiveRedUnit(units)
+    for _, unit in ipairs(units or {}) do
+        local hp = tonumber(unit.currentHp) or tonumber(unit.hp) or 0
+        if hp > 0 and tonumber(unit.player) == 2 and tostring(unit.name or "") ~= "Commandant" then
+            return true
+        end
+    end
+    return false
+end
+
+local function stableString(value)
+    if value == nil then
+        return ""
+    end
+    return tostring(value)
+end
+
+local function liveBlueUnitIds(units)
+    local ids = {}
+    for index, unit in ipairs(units or {}) do
+        local hp = tonumber(unit.currentHp) or tonumber(unit.hp) or 0
+        if hp > 0 and tonumber(unit.player) == 1 then
+            local id = stableString(unit.scenarioUnitId or unit.id or index)
+            if id ~= "" then
+                ids[id] = true
+            end
+        end
+    end
+    return ids
+end
+
+local function blueCoordinationContract(actions, blueActorIds, finisherId)
+    local supportActions = 0
+    local finisherActions = 0
+    local supportActors = {}
+    local firstBlueAction = nil
+    local supportAttackBeforePayoff = false
+    local finisherPayoff = false
+    finisherId = stableString(finisherId or "blue_finisher")
+
+    for _, action in ipairs(actions or {}) do
+        if type(action) == "table" then
+            local actor = stableString(action.actorId)
+            local isBlueActor = blueActorIds[actor] == true
+            if isBlueActor and actor ~= finisherId then
+                supportActions = supportActions + 1
+                supportActors[actor] = true
+                firstBlueAction = firstBlueAction or action
+                if action.type == "attack" and not finisherPayoff then
+                    supportAttackBeforePayoff = true
+                end
+            elseif isBlueActor and actor == finisherId then
+                finisherActions = finisherActions + 1
+                firstBlueAction = firstBlueAction or action
+                if action.type == "attack" and action.targetId == "red_commandant" then
+                    finisherPayoff = true
+                end
+            end
+        end
+    end
+
+    local supportActorCount = 0
+    for _ in pairs(supportActors) do
+        supportActorCount = supportActorCount + 1
+    end
+
+    return {
+        pass = supportActions >= 2
+            and finisherActions >= 2
+            and type(firstBlueAction) == "table"
+            and blueActorIds[stableString(firstBlueAction.actorId)] == true
+            and stableString(firstBlueAction.actorId) ~= finisherId
+            and firstBlueAction.type == "move"
+            and supportAttackBeforePayoff == true
+            and finisherPayoff == true,
+        supportActions = supportActions,
+        supportActors = supportActorCount,
+        finisherActions = finisherActions,
+        firstBlueActor = firstBlueAction and firstBlueAction.actorId or nil,
+        firstBlueActionType = firstBlueAction and firstBlueAction.type or nil,
+        supportAttackBeforePayoff = supportAttackBeforePayoff,
+        finisherPayoff = finisherPayoff
+    }
+end
+
+local function generatedDossierHasBlueCoordination(dossier)
+    local blueActorIds = liveBlueUnitIds(dossier and dossier.scenarioState and dossier.scenarioState.units or {})
+    local solutionActions = dossier and dossier.solution and dossier.solution.actions or {}
+    local report = blueCoordinationContract(solutionActions, blueActorIds, "blue_finisher")
+    if report.pass then
+        return true, report
+    end
+
+    local proofActions = dossier and dossier.solverProof and dossier.solverProof.winningLine or {}
+    report = blueCoordinationContract(proofActions, blueActorIds, "blue_finisher")
+    return report.pass == true, report
+end
+
+local function clearChannel(channel)
+    if not channel then
+        return
+    end
+    if type(channel.clear) == "function" then
+        pcall(channel.clear, channel)
+        return
+    end
+    while channel:pop() ~= nil do
+    end
+end
+
+local function startScenarioGenerationThread(job)
+    if not (love and love.thread and type(love.thread.newThread) == "function" and type(love.thread.getChannel) == "function") then
+        return false, "love_thread_unavailable"
+    end
+
+    local token = "scenario_editor_generation_" .. tostring(editorGenerationSerial)
+    local requestChannelName = token .. "_request"
+    local responseChannelName = token .. "_response"
+    local cancelChannelName = token .. "_cancel"
+    local requestChannel = love.thread.getChannel(requestChannelName)
+    local responseChannel = love.thread.getChannel(responseChannelName)
+    local cancelChannel = love.thread.getChannel(cancelChannelName)
+    clearChannel(requestChannel)
+    clearChannel(responseChannel)
+    clearChannel(cancelChannel)
+
+    local okThread, threadOrErr = pcall(love.thread.newThread, SCENARIO_GENERATION_WORKER_PATH)
+    if not okThread or not threadOrErr then
+        return false, tostring(threadOrErr or "thread_create_failed")
+    end
+
+    job.mode = "thread"
+    job.token = token
+    job.thread = threadOrErr
+    job.responseChannel = responseChannel
+    job.cancelChannel = cancelChannel
+    requestChannel:push({
+        token = token,
+        seedBase = job.seedBase,
+        maxAttempts = job.maxAttempts,
+        profileStartIndex = job.profileStartIndex,
+        solverMaxNodes = SCENARIO_NEW_GENERATOR_SOLVER_MAX_NODES,
+        profiles = cloneValue(generatorArchetypes)
+    })
+
+    local okStart, startErr = pcall(function()
+        threadOrErr:start(requestChannelName, responseChannelName, cancelChannelName)
+    end)
+    if not okStart then
+        job.mode = "inline"
+        return false, tostring(startErr or "thread_start_failed")
+    end
+    return true
+end
+
+local function reasonCodesFromQuality(result)
+    local codes = {}
+    local function collect(list)
+        for _, entry in ipairs(list or {}) do
+            local code = type(entry) == "table" and entry.code or entry
+            if code ~= nil then
+                codes[#codes + 1] = tostring(code)
+            end
+        end
+    end
+    collect(result and result.reasons)
+    collect(result and result.unknowns)
+    if #codes == 0 then
+        return "no_quality_reason"
+    end
+    return table.concat(codes, ", ")
+end
+
+local function loadGeneratedScenarioIntoEditor(dossier, quality)
+    local state = dossier and dossier.scenarioState or nil
+    if type(state) ~= "table" or type(state.units) ~= "table" then
+        return false, "missing_generated_state"
+    end
+
+    local loadedUnits = {}
+    for _, unit in ipairs(state.units) do
+        local name = tostring(unit.name or "")
+        local row = math.floor(tonumber(unit.row) or 0)
+        local col = math.floor(tonumber(unit.col) or 0)
+        if name ~= "" and row >= 1 and row <= 8 and col >= 1 and col <= 8 then
+            local player = tonumber(unit.player) or 0
+            if name == "Rock" then
+                player = 0
+            elseif player ~= 1 and player ~= 2 then
+                player = 1
+            end
+            loadedUnits[#loadedUnits + 1] = {
+                scenarioUnitId = unit.scenarioUnitId or unit.id,
+                name = name,
+                player = player,
+                row = row,
+                col = col,
+                hp = math.max(1, math.floor(tonumber(unit.currentHp) or tonumber(unit.startingHp) or getUnitBaseHp(name))),
+                acted = unit.hasActed == true
+            }
+        end
+    end
+
+    if #loadedUnits == 0 then
+        return false, "generated_state_has_no_units"
+    end
+    if not hasActiveRedUnit(loadedUnits) then
+        return false, "generated_state_has_no_active_red_unit"
+    end
+    local hasCoordination = generatedDossierHasBlueCoordination(dossier)
+    if not hasCoordination then
+        return false, "generated_state_lacks_blue_coordination"
+    end
+
+    editorUnits = loadedUnits
+    editorGeneratedDossier = cloneValue(dossier)
+    editorGeneratedQuality = cloneValue(quality)
+    editorBoardDirtySinceDossier = false
+    editorBoardDirtyReason = nil
+    scenarioCode = normalizeScenarioCode(dossier.id or ("G" .. tostring(dossier.seed or "")))
+    scenarioRoundLimit = math.max(1, math.floor(tonumber(state.turnLimit) or tonumber(dossier.turnLimit) or 3))
+    editorScenarioAttempts = 0
+    selectedUnitIndex = nil
+    selectCell(1, 1)
+    return true
 end
 
 local function findUnitIndexAt(row, col)
@@ -314,7 +783,7 @@ local function getSelectedUnit()
     return nil, nil
 end
 
-local function getUnitBaseHp(unitName)
+getUnitBaseHp = function(unitName)
     local info = unitsInfo and unitsInfo.getUnitInfo and unitsInfo:getUnitInfo(unitName) or nil
     local hp = info and tonumber(info.startingHp or info.hp) or nil
     if hp and hp > 0 then
@@ -331,7 +800,7 @@ local function buildRuntimeScenarioSnapshotFromEditor()
     local firstRedUnitIndex = nil
     local blueUnitCount = 0
 
-    for _, rawUnit in ipairs(editorUnits) do
+    for sourceIndex, rawUnit in ipairs(editorUnits) do
         local row = math.floor(tonumber(rawUnit.row) or 0)
         local col = math.floor(tonumber(rawUnit.col) or 0)
         local name = tostring(rawUnit.name or "")
@@ -362,6 +831,12 @@ local function buildRuntimeScenarioSnapshotFromEditor()
             currentHp = math.max(1, currentHp)
 
             local unitEntry = {
+                scenarioUnitId = rawUnit.scenarioUnitId or rawUnit.id or makeScenarioUnitId({
+                    name = name,
+                    player = player,
+                    row = row,
+                    col = col
+                }, sourceIndex),
                 row = row,
                 col = col,
                 name = name,
@@ -473,7 +948,6 @@ local function buildRuntimeScenarioSnapshotFromEditor()
 
     local integritySignature = computeScenarioIntegritySignature(boardUnits)
     local seed = 13001 + #boardUnits + math.max(1, math.floor(tonumber(scenarioRoundLimit) or 1))
-
     return {
         version = 4,
         currentPhase = "turn",
@@ -483,7 +957,7 @@ local function buildRuntimeScenarioSnapshotFromEditor()
         turnOrder = turnOrder,
         factionAssignments = factionAssignments,
         winner = nil,
-        maxActionsPerTurn = 2,
+        maxActionsPerTurn = SCENARIO_RUNTIME_ACTION_BUDGET,
         currentTurnActions = 0,
         hasDeployedThisTurn = true,
         commandHubPositions = commandHubPositions,
@@ -535,6 +1009,59 @@ local function formatSnapshotBuildError(reason)
     return tostring(reason or "invalid_scenario")
 end
 
+local function buildScenarioRedPolicyConfig()
+    local okPolicy, runtimePolicy = pcall(require, "scenarioRedPolicy")
+    local dossier = editorGeneratedDossier
+    local config = type(dossier) == "table" and type(dossier.scenarioRedPolicy) == "table"
+        and cloneValue(dossier.scenarioRedPolicy)
+        or {
+        runtime = "scenarioRedRuntime",
+        policy = "scenarioRedPolicy",
+        policyVersion = okPolicy and runtimePolicy.VERSION or "scenario_red_policy.v2",
+        policyHash = okPolicy and runtimePolicy.POLICY_HASH or nil,
+        seed = scenarioCode,
+        requiredCells = {},
+        criticalBlueUnitIds = { "blue_finisher" }
+    }
+
+    config.runtime = config.runtime or "scenarioRedRuntime"
+    config.policy = config.policy or "scenarioRedPolicy"
+    config.policyVersion = config.policyVersion or (okPolicy and runtimePolicy.VERSION or "scenario_red_policy.v2")
+    config.policyHash = config.policyHash or (okPolicy and runtimePolicy.POLICY_HASH or nil)
+    config.requiredCells = type(config.requiredCells) == "table" and config.requiredCells or {}
+    config.criticalBlueUnitIds = type(config.criticalBlueUnitIds) == "table" and config.criticalBlueUnitIds or { "blue_finisher" }
+
+    if type(dossier) == "table" then
+        config.seed = dossier.seed or dossier.id or scenarioCode
+        local seenCells = {}
+        for _, cell in ipairs(config.requiredCells) do
+            if type(cell) == "table" then
+                local row = tonumber(cell.row)
+                local col = tonumber(cell.col)
+                if row and col then
+                    seenCells[tostring(row) .. ":" .. tostring(col)] = true
+                end
+            end
+        end
+        for _, action in ipairs(dossier.solution and dossier.solution.actions or {}) do
+            local to = action and action.to
+            if type(to) == "table" then
+                local row = tonumber(to.row)
+                local col = tonumber(to.col)
+                if row and col then
+                    local key = tostring(row) .. ":" .. tostring(col)
+                    if not seenCells[key] then
+                        seenCells[key] = true
+                        config.requiredCells[#config.requiredCells + 1] = { row = row, col = col }
+                    end
+                end
+            end
+        end
+    end
+
+    return config
+end
+
 local function getUnitSpritePath(unit)
     if not unit or type(unit.name) ~= "string" then
         return nil
@@ -566,7 +1093,7 @@ local function getUnitSprite(unit)
     return nil
 end
 
-local function selectCell(row, col)
+selectCell = function(row, col)
     selectedCell.row = math.max(1, math.min(8, math.floor(tonumber(row) or 1)))
     selectedCell.col = math.max(1, math.min(8, math.floor(tonumber(col) or 1)))
 end
@@ -599,7 +1126,20 @@ local function updateButtonStates()
     local selectedUnit = getSelectedUnit()
     local selectedCellUnitIndex = findUnitIndexAt(selectedCell.row, selectedCell.col)
     local selectedIsRedCommandant = selectedUnit and selectedUnit.name == "Commandant" and tonumber(selectedUnit.player) == 2
+    local generationActive = isGenerationActive()
 
+    if uiButtons.newScenario then
+        uiButtons.newScenario.text = generationActive and "Generating..." or "New Scenario"
+    end
+
+    if uiButtons.back then uiButtons.back.enabled = true end
+    if uiButtons.newScenario then uiButtons.newScenario.enabled = true end
+    if uiButtons.simulate then uiButtons.simulate.enabled = true end
+    if uiButtons.export then uiButtons.export.enabled = true end
+    if uiButtons.roundMinus then uiButtons.roundMinus.enabled = true end
+    if uiButtons.roundPlus then uiButtons.roundPlus.enabled = true end
+    if uiButtons.tagButton then uiButtons.tagButton.enabled = true end
+    if uiButtons.complexityButton then uiButtons.complexityButton.enabled = true end
     if uiButtons.changeFaction then uiButtons.changeFaction.enabled = selectedUnit ~= nil end
     if uiButtons.cycleUnit then
         uiButtons.cycleUnit.enabled = (selectedCellUnitIndex == nil) or ((selectedUnit ~= nil) and (not selectedIsRedCommandant))
@@ -610,9 +1150,16 @@ local function updateButtonStates()
     if uiButtons.hpPlus then uiButtons.hpPlus.enabled = selectedUnit ~= nil end
     if uiButtons.toggleActed then uiButtons.toggleActed.enabled = selectedUnit ~= nil end
     if uiButtons.removeUnit then uiButtons.removeUnit.enabled = selectedUnit ~= nil end
-    if uiButtons.validate then uiButtons.validate.enabled = false end
 
     updateDynamicButtonLabels(selectedUnit, selectedCellUnitIndex)
+
+    if generationActive then
+        for _, button in ipairs(buttonOrder) do
+            button.enabled = (button == uiButtons.back)
+        end
+        selectedButtonIndex = 1
+        boardFocus = false
+    end
 
     for index, button in ipairs(buttonOrder) do
         local variant = (button.enabled ~= false) and (button.variantName or "default") or "disabled"
@@ -663,7 +1210,7 @@ local function initializeButtons()
     uiButtons.back = createButton("back", "Back", x0, y, w, h, "default")
     uiButtons.newScenario = createButton("newScenario", "New Scenario", x0 + w + g, y, w, h, "default")
     uiButtons.simulate = createButton("simulate", "Simulate", x0 + (w + g) * 2, y, w, h, "success")
-    uiButtons.validate = createButton("validate", "Validate", x0 + (w + g) * 3, y, w, h, "success")
+    uiButtons.export = createButton("export", "Export", x0 + (w + g) * 3, y, w, h, "success")
 
     local section = layout.sectionScenario
     local innerX = section.x + 12
@@ -715,7 +1262,7 @@ local function initializeButtons()
         uiButtons.back,
         uiButtons.newScenario,
         uiButtons.simulate,
-        uiButtons.validate,
+        uiButtons.export,
         uiButtons.roundMinus,
         uiButtons.roundPlus,
         uiButtons.tagButton,
@@ -735,18 +1282,281 @@ local function initializeButtons()
 end
 
 local function onBack()
+    if isGenerationActive() then
+        if editorGenerationJob.mode == "thread" and editorGenerationJob.cancelChannel then
+            pcall(function()
+                editorGenerationJob.cancelChannel:push(true)
+            end)
+        end
+        editorGenerationJob.cancelled = true
+        editorGenerationJob = nil
+        appendLog("- Scenario generation cancelled.")
+        setStatus("Scenario generation cancelled.", "warn")
+        updateButtonStates()
+        return
+    end
+
     if stateMachineRef then
         stateMachineRef.changeState("scenarioSelect")
     end
 end
 
+local function startNewScenarioGeneration()
+    if isGenerationActive() then
+        return
+    end
+
+    local okGenerator, retroGenerator = pcall(require, "scenario_tooling.retro_generator")
+    local okQuality, qualityEvaluator = pcall(require, "scenario_tooling.quality_evaluator")
+    if not okGenerator or type(retroGenerator) ~= "table" or type(retroGenerator.generate) ~= "function"
+        or not okQuality or type(qualityEvaluator) ~= "table" or type(qualityEvaluator.evaluate) ~= "function" then
+        appendLog("- Generator unavailable; board unchanged.")
+        setStatus("Scenario generator unavailable.", "error")
+        return
+    end
+
+    editorGenerationSerial = math.max(0, math.floor(tonumber(editorGenerationSerial) or 0)) + 1
+    local seed = nextGeneratedScenarioSeed()
+    editorGenerationJob = {
+        active = true,
+        cancelled = false,
+        mode = "inline",
+        attempt = 0,
+        maxAttempts = SCENARIO_NEW_GENERATOR_MAX_ATTEMPTS,
+        seedBase = seed,
+        profileStartIndex = randomGeneratorIndex(#generatorArchetypes),
+        retroGenerator = retroGenerator,
+        qualityEvaluator = qualityEvaluator
+    }
+    local threadStarted, threadErr = startScenarioGenerationThread(editorGenerationJob)
+
+    appendLog(string.format("- Generating scenario seed %d. Back cancels.", seed))
+    if not threadStarted then
+        scenarioTrace("Editor", "- new_scenario.thread_fallback reason=" .. tostring(threadErr))
+    end
+    scenarioTrace("Editor", string.format(
+        "new_scenario.request seed=%d turnLimit=3 maxAttempts=%d profiles=%d",
+        seed,
+        SCENARIO_NEW_GENERATOR_MAX_ATTEMPTS,
+        #generatorArchetypes
+    ))
+    setStatus("Generating scenario candidate... Back cancels.", "info")
+    boardFocus = false
+    selectedButtonIndex = 1
+    updateButtonStates()
+end
+
+local function summarizeRejectedGeneration(dossier, quality)
+    local qualityReasons = reasonCodesFromQuality(quality)
+    if qualityReasons ~= "no_quality_reason" then
+        return qualityReasons
+    end
+
+    local codes = {}
+    for _, reason in ipairs(dossier and dossier.rejectionReasons or {}) do
+        local code = type(reason) == "table" and reason.code or reason
+        if code ~= nil then
+            codes[#codes + 1] = tostring(code)
+        end
+    end
+    if #codes > 0 then
+        return table.concat(codes, ", ")
+    end
+    return "candidate_not_approved"
+end
+
+local function pollScenarioGenerationThread(job)
+    if not (job and job.responseChannel) then
+        editorGenerationJob = nil
+        setStatus("Scenario generator worker unavailable.", "error")
+        updateButtonStates()
+        return true
+    end
+
+    local handledMessage = false
+    while isGenerationActive() do
+        local message = job.responseChannel:pop()
+        if type(message) ~= "table" then
+            break
+        end
+        if message.token == job.token then
+            handledMessage = true
+            local status = tostring(message.status or "")
+            if status == "attempt" then
+                job.attempt = tonumber(message.attempt) or job.attempt
+                appendLog(string.format(
+                    "- Try %02d/%02d: %s.",
+                    tonumber(message.attempt) or 0,
+                    tonumber(message.maxAttempts) or job.maxAttempts,
+                    tostring(message.label or message.archetype or "profile")
+                ))
+                scenarioTrace("Editor", string.format(
+                    "new_scenario.attempt attempt=%d seed=%d archetype=%s",
+                    tonumber(message.attempt) or 0,
+                    tonumber(message.seed) or 0,
+                    tostring(message.archetype)
+                ))
+            elseif status == "rejected" then
+                scenarioTrace("Editor", "- new_scenario.rejected reasons=" .. tostring(message.reason or "candidate_not_approved"))
+            elseif status == "certified" then
+                traceGeneratedDossier(message.seed, message.dossier, message.quality)
+                local loaded, loadErr = loadGeneratedScenarioIntoEditor(message.dossier, message.quality)
+                if loaded then
+                    editorGenerationJob = nil
+                    appendLog(string.format("- Generated %s loaded (%d units).", tostring(scenarioCode), #editorUnits))
+                    appendLog(string.format("- Archetype: %s.", tostring(message.dossier.tacticalFingerprint and message.dossier.tacticalFingerprint.role_signature or message.archetype)))
+                    if message.playtestOnly == true then
+                        appendLog("- Editor playtest profile: not release-quality approved.")
+                    end
+                    appendLog(string.format("- Proof: %s, false lines: %d.", tostring(message.dossier.solverProof and message.dossier.solverProof.status or "unknown"), #(message.dossier.falseLines or {})))
+                    traceUnitList("Editor", "editor.units_after_new_scenario", editorUnits)
+                    setStatus("Generated scenario loaded into editor.", "ok")
+                    updateButtonStates()
+                    return true
+                else
+                    appendLog("- Generated candidate could not load: " .. tostring(loadErr))
+                    scenarioTrace("Editor", "- new_scenario.load_rejected reason=" .. tostring(loadErr))
+                    setStatus("Generating scenario candidate... Back cancels.", "info")
+                end
+            elseif status == "failed" then
+                editorGenerationJob = nil
+                appendLog("- Generated candidates rejected by gates.")
+                setStatus("Generated scenarios failed quality gates.", "warn")
+                updateButtonStates()
+                return true
+            elseif status == "cancelled" then
+                editorGenerationJob = nil
+                setStatus("Scenario generation cancelled.", "warn")
+                updateButtonStates()
+                return true
+            elseif status == "error" then
+                editorGenerationJob = nil
+                appendLog("- Generator worker failed: " .. tostring(message.reason or "worker_error"))
+                setStatus("Scenario generator worker failed.", "error")
+                updateButtonStates()
+                return true
+            end
+        end
+    end
+
+    if handledMessage then
+        setStatus("Generating scenario candidate... Back cancels.", "info")
+    elseif job.thread and type(job.thread.getError) == "function" then
+        local okError, threadErr = pcall(function()
+            return job.thread:getError()
+        end)
+        if okError and threadErr then
+            appendLog("- Generator worker fallback.")
+            scenarioTrace("Editor", "- new_scenario.thread_error_fallback reason=" .. tostring(threadErr))
+            job.mode = "inline"
+            job.thread = nil
+            job.responseChannel = nil
+            job.cancelChannel = nil
+            setStatus("Generator worker fallback; continuing.", "warn")
+            updateButtonStates()
+            return true
+        end
+    end
+    updateButtonStates()
+    return true
+end
+
+local function stepScenarioGenerationJob()
+    if not isGenerationActive() then
+        return false
+    end
+
+    local job = editorGenerationJob
+    if job.mode == "thread" then
+        return pollScenarioGenerationThread(job)
+    end
+
+    if job.cancelled == true then
+        editorGenerationJob = nil
+        setStatus("Scenario generation cancelled.", "warn")
+        updateButtonStates()
+        return true
+    end
+
+    if job.attempt >= job.maxAttempts then
+        editorGenerationJob = nil
+        appendLog("- No certified scenario found.")
+        setStatus("No generated scenario passed the gates.", "warn")
+        updateButtonStates()
+        return true
+    end
+
+    job.attempt = job.attempt + 1
+    local profile, profileIndex = generatorProfileForAttempt(job)
+    if not profile then
+        editorGenerationJob = nil
+        appendLog("- Generator profile list is empty.")
+        setStatus("Scenario generator has no profiles.", "error")
+        updateButtonStates()
+        return true
+    end
+
+    local seed = (job.seedBase + (job.attempt * 104729) + (profileIndex * 4099)) % 4294967296
+    appendLog(string.format("- Try %02d/%02d: %s.", job.attempt, job.maxAttempts, tostring(profile.label or profile.archetype)))
+    scenarioTrace("Editor", string.format(
+        "new_scenario.attempt attempt=%d seed=%d archetype=%s",
+        job.attempt,
+        seed,
+        tostring(profile.archetype)
+    ))
+
+    local dossier = job.retroGenerator.generate({
+        seed = seed,
+        turnLimit = 3,
+        archetype = profile.archetype,
+        solverMaxNodes = SCENARIO_NEW_GENERATOR_SOLVER_MAX_NODES,
+        maxAttempts = 1
+    })
+    local quality = job.qualityEvaluator.evaluate(dossier)
+    traceGeneratedDossier(seed, dossier, quality)
+    local isCertified = type(dossier) == "table" and dossier.pipelineState == "certified"
+    local isQualityApproved = type(quality) == "table" and quality.status == "approved"
+    local allowEditorPlaytest = profile.allowEditorPlaytest == true
+    local canLoadForEditor = isCertified and (isQualityApproved or allowEditorPlaytest)
+
+    if canLoadForEditor then
+        local loaded, loadErr = loadGeneratedScenarioIntoEditor(dossier, quality)
+        if loaded then
+            editorGenerationJob = nil
+            appendLog(string.format("- Generated %s loaded (%d units).", tostring(scenarioCode), #editorUnits))
+            appendLog(string.format("- Archetype: %s.", tostring(dossier.tacticalFingerprint and dossier.tacticalFingerprint.role_signature or profile.archetype)))
+            if allowEditorPlaytest and not isQualityApproved then
+                appendLog("- Editor playtest profile: not release-quality approved.")
+            end
+            appendLog(string.format("- Proof: %s, false lines: %d.", tostring(dossier.solverProof and dossier.solverProof.status or "unknown"), #(dossier.falseLines or {})))
+            traceUnitList("Editor", "editor.units_after_new_scenario", editorUnits)
+            setStatus("Generated scenario loaded into editor.", "ok")
+            updateButtonStates()
+            return true
+        end
+
+        appendLog("- Generated candidate could not load: " .. tostring(loadErr))
+        scenarioTrace("Editor", "- new_scenario.load_rejected reason=" .. tostring(loadErr))
+    else
+        local rejectionSummary = summarizeRejectedGeneration(dossier, quality)
+        scenarioTrace("Editor", "- new_scenario.rejected reasons=" .. rejectionSummary)
+    end
+
+    if job.attempt >= job.maxAttempts then
+        editorGenerationJob = nil
+        appendLog("- Generated candidates rejected by gates.")
+        setStatus("Generated scenarios failed quality gates.", "warn")
+        updateButtonStates()
+        return true
+    end
+
+    setStatus("Generating scenario candidate... Back cancels.", "info")
+    updateButtonStates()
+    return true
+end
+
 local function onNewScenario()
-    editorUnits = {}
-    selectedUnitIndex = nil
-    selectCell(1, 1)
-    editorScenarioAttempts = 0
-    appendLog("- New scenario board cleared.")
-    setStatus("New scenario created.", "ok")
+    startNewScenarioGeneration()
 end
 
 local function onSimulate()
@@ -790,6 +1600,7 @@ local function onSimulate()
         setStatus("Cannot simulate: " .. formatSnapshotBuildError(snapshotErr), "error")
         return
     end
+    traceUnitList("Editor", "simulate.snapshot.boardUnits", snapshot.boardUnits or {})
 
     if GAME and type(GAME.resetToDefaultControllers) == "function" then
         GAME.resetToDefaultControllers()
@@ -812,9 +1623,11 @@ local function onSimulate()
         objectiveText = objectiveText,
         objectiveType = "destroy_commandant",
         sideToMove = "Blue",
+        scenarioRedPolicy = buildScenarioRedPolicyConfig(),
         sourcePath = "scenario_editor_runtime",
         snapshot = snapshot
     }
+    traceScenarioPolicyConfig("Editor", "simulate.scenarioRedPolicy", GAME.CURRENT.SCENARIO.scenarioRedPolicy)
     GAME.CURRENT.SCENARIO_RESULT = nil
     GAME.CURRENT.SCENARIO_RETURN_STATE = "scenarioEditor"
     GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
@@ -831,31 +1644,337 @@ local function onSimulate()
     end
 end
 
-local function onValidate()
+local function luaQuote(value)
+    return string.format("%q", tostring(value or ""))
+end
+
+local function isIdentifierKey(value)
+    return type(value) == "string" and value:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
+end
+
+local function sortedTableKeys(tbl)
+    local numericKeys = {}
+    local stringKeys = {}
+    local otherKeys = {}
+    for key in pairs(tbl or {}) do
+        if type(key) == "number" then
+            numericKeys[#numericKeys + 1] = key
+        elseif type(key) == "string" then
+            stringKeys[#stringKeys + 1] = key
+        else
+            otherKeys[#otherKeys + 1] = key
+        end
+    end
+    table.sort(numericKeys)
+    table.sort(stringKeys)
+    table.sort(otherKeys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+
+    local keys = {}
+    for _, key in ipairs(numericKeys) do keys[#keys + 1] = key end
+    for _, key in ipairs(stringKeys) do keys[#keys + 1] = key end
+    for _, key in ipairs(otherKeys) do keys[#keys + 1] = key end
+    return keys
+end
+
+local function serializeLuaValue(value, indent, seen)
+    indent = indent or 0
+    local valueType = type(value)
+    if valueType == "nil" then
+        return "nil"
+    end
+    if valueType == "boolean" or valueType == "number" then
+        return tostring(value)
+    end
+    if valueType == "string" then
+        return luaQuote(value)
+    end
+    if valueType ~= "table" then
+        return luaQuote(value)
+    end
+
+    seen = seen or {}
+    if seen[value] then
+        error("cannot export recursive table", 2)
+    end
+    seen[value] = true
+
+    local keys = sortedTableKeys(value)
+    if #keys == 0 then
+        seen[value] = nil
+        return "{}"
+    end
+
+    local pad = string.rep(" ", indent)
+    local childPad = string.rep(" ", indent + 4)
+    local lines = {}
+    for _, key in ipairs(keys) do
+        local keyPrefix
+        if isIdentifierKey(key) then
+            keyPrefix = key .. " = "
+        elseif type(key) == "number" then
+            keyPrefix = "[" .. tostring(key) .. "] = "
+        else
+            keyPrefix = "[" .. luaQuote(key) .. "] = "
+        end
+        lines[#lines + 1] = childPad .. keyPrefix .. serializeLuaValue(value[key], indent + 4, seen)
+    end
+
+    seen[value] = nil
+    return "{\n" .. table.concat(lines, ",\n") .. "\n" .. pad .. "}"
+end
+
+local function scenarioFileExists(path)
+    if love and love.filesystem and type(love.filesystem.getInfo) == "function" then
+        local ok, info = pcall(love.filesystem.getInfo, path)
+        return ok and info ~= nil
+    end
+
+    local file = io.open(path, "r")
+    if file then
+        file:close()
+        return true
+    end
+    return false
+end
+
+local function generateExportScenarioCode()
+    scenarioExportCounter = scenarioExportCounter + 1
+    local stamp = os.date and os.date("%Y%m%d%H%M%S") or tostring(os.time and os.time() or 1)
+    local suffix = scenarioExportCounter
+    if love and love.timer and type(love.timer.getTime) == "function" then
+        suffix = suffix + math.floor((love.timer.getTime() * 1000) % 1000)
+    end
+
+    local base = "Scenario#" .. tostring(stamp) .. "-" .. string.format("%03d", suffix)
+    local candidate = base
+    local attempt = 1
+    while scenarioFileExists("scenarios/" .. candidate .. ".lua") do
+        attempt = attempt + 1
+        candidate = base .. "-" .. tostring(attempt)
+    end
+    return candidate
+end
+
+local function buildScenarioExportContent(exportCode, snapshot, turnsTarget, redPolicyConfig, dossierPath, solutionPath)
+    local objectiveText = "Blue to move. Destroy the enemy Commandant within " .. tostring(turnsTarget) .. " turns."
+    return table.concat({
+        "-- Exported from Scenario Editor. Scenario-only data; no standard AI dependency.",
+        "return {",
+        "    id = " .. luaQuote(exportCode) .. ",",
+        "    name = " .. luaQuote("Scenario " .. exportCode) .. ",",
+        "    status = " .. luaQuote(SCENARIO_EXPORT_STATUS) .. ",",
+        "    promotion = {",
+        "        state = \"promoted\",",
+        "        approved = true,",
+        "        source = \"scenario_editor_manual_export\",",
+        "        dossierPath = " .. luaQuote(dossierPath or "") .. ",",
+        "        solutionPath = " .. luaQuote(solutionPath or ""),
+        "    },",
+        "    objectiveType = \"destroy_commandant\",",
+        "    objectiveMessage = " .. luaQuote(objectiveText) .. ",",
+        "    objectiveText = " .. luaQuote(objectiveText) .. ",",
+        "    sideToMove = \"Blue\",",
+        "    turnLimitRounds = " .. tostring(turnsTarget) .. ",",
+        "    dossierPath = " .. luaQuote(dossierPath or "") .. ",",
+        "    solutionPath = " .. luaQuote(solutionPath or "") .. ",",
+        "    scenarioRedPolicy = " .. serializeLuaValue(redPolicyConfig or buildScenarioRedPolicyConfig(), 4) .. ",",
+        "    startSnapshot = " .. serializeLuaValue(snapshot, 4),
+        "}",
+        ""
+    }, "\n")
+end
+
+local function buildScenarioExportDossier(exportCode, snapshot, turnsTarget, redPolicyConfig, solutionPath)
+    local sourceDossier = type(editorGeneratedDossier) == "table" and cloneValue(editorGeneratedDossier) or nil
+    local sourceQuality = type(editorGeneratedQuality) == "table" and cloneValue(editorGeneratedQuality) or nil
+    local proofApplies = sourceDossier ~= nil and editorBoardDirtySinceDossier ~= true
+
+    return {
+        schema = "ScenarioExportDossier",
+        version = 1,
+        id = exportCode,
+        status = "promoted",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "scenario_editor_manual_export"
+        },
+        manualPromotion = true,
+        exportedAt = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or nil,
+        solutionPath = solutionPath,
+        turnLimitRounds = turnsTarget,
+        proofAppliesToCurrentSnapshot = proofApplies,
+        sourceDossierStale = sourceDossier ~= nil and editorBoardDirtySinceDossier == true or false,
+        sourceSolutionStale = sourceDossier ~= nil and editorBoardDirtySinceDossier == true or false,
+        solutionAppliesToCurrentSnapshot = proofApplies,
+        dirtyReason = editorBoardDirtyReason,
+        scenarioRedPolicy = cloneValue(redPolicyConfig or {}),
+        currentSnapshot = cloneValue(snapshot),
+        sourceQuality = sourceQuality,
+        sourceDossier = sourceDossier,
+        proofCertificate = sourceDossier and cloneValue(sourceDossier.proofCertificate) or nil,
+        solverProof = sourceDossier and cloneValue(sourceDossier.solverProof) or nil,
+        falseLines = sourceDossier and cloneValue(sourceDossier.falseLines) or nil
+    }
+end
+
+local function buildScenarioExportDossierContent(exportDossier)
+    return table.concat({
+        "-- Scenario export dossier. Internal Scenario Mode tooling metadata.",
+        "-- Playable scenario files are shipped separately from proof/promotion records.",
+        "return " .. serializeLuaValue(exportDossier, 0),
+        ""
+    }, "\n")
+end
+
+local function buildScenarioExportSolution(exportCode, solutionPath)
+    local sourceDossierRaw = type(editorGeneratedDossier) == "table" and editorGeneratedDossier or nil
+    local sourceDossier = sourceDossierRaw and cloneValue(sourceDossierRaw) or nil
+    local sourceSolutionRaw = sourceDossierRaw and type(sourceDossierRaw.solution) == "table" and sourceDossierRaw.solution or nil
+    local actions = canonicalExportActionList(sourceSolutionRaw and sourceSolutionRaw.actions or {})
+    if #actions == 0 and sourceDossierRaw and type(sourceDossierRaw.solverProof) == "table" then
+        actions = canonicalExportActionList(sourceDossierRaw.solverProof.winningLine or {})
+    end
+
+    return {
+        schema = "ScenarioSolution",
+        version = 1,
+        id = exportCode,
+        solutionPath = solutionPath,
+        exportedAt = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or nil,
+        generatedWithScenario = sourceDossier ~= nil,
+        sourceDossierId = sourceDossier and sourceDossier.id or nil,
+        sourceSeed = sourceDossier and sourceDossier.seed or nil,
+        sourceContractPattern = sourceDossier and sourceDossier.contractPattern or nil,
+        sourceSolutionStale = sourceDossier ~= nil and editorBoardDirtySinceDossier == true or false,
+        solutionAppliesToCurrentSnapshot = sourceDossier ~= nil and editorBoardDirtySinceDossier ~= true,
+        dirtyReason = editorBoardDirtyReason,
+        note = "Solution is generated with the scenario candidate and is not recomputed from manual editor edits.",
+        actions = actions,
+        solution = { actions = cloneValue(actions) },
+        falseLines = sourceDossier and cloneValue(sourceDossier.falseLines) or {},
+        proofCertificate = sourceDossier and cloneValue(sourceDossier.proofCertificate) or nil,
+        solverProof = sourceDossier and cloneValue(sourceDossier.solverProof) or nil
+    }
+end
+
+local function buildScenarioExportSolutionContent(exportSolution)
+    return table.concat({
+        "-- Scenario solution sidecar. Generated from the original candidate dossier.",
+        "-- Manual editor edits are exported in the playable scenario snapshot, not recomputed here.",
+        "return " .. serializeLuaValue(exportSolution, 0),
+        ""
+    }, "\n")
+end
+
+local function scenarioExportDirectory(path)
+    return tostring(path or ""):match("^(.*)/[^/]+$") or ""
+end
+
+local function writeScenarioExportFile(path, content)
+    if love and love.filesystem and type(love.filesystem.write) == "function" then
+        if type(love.filesystem.createDirectory) == "function" then
+            local directory = scenarioExportDirectory(path)
+            if directory ~= "" then
+                pcall(love.filesystem.createDirectory, directory)
+            end
+        end
+        local ok, result, err = pcall(love.filesystem.write, path, content)
+        if ok and result then
+            return true, path
+        end
+        return false, tostring(err or result or "write_failed")
+    end
+
+    local file, err = io.open(path, "w")
+    if not file then
+        return false, tostring(err or "write_failed")
+    end
+    file:write(content)
+    file:close()
+    return true, path
+end
+
+local function onExport()
     local redCmdCount = 0
-    local boardUnitCount = #editorUnits
+    local hasBlueUnit = false
     for _, unit in ipairs(editorUnits) do
-        if unit.name == "Commandant" and unit.player == 2 then
+        if unit.name ~= "Rock" and tonumber(unit.player) == 1 then
+            hasBlueUnit = true
+        end
+        if unit.name == "Commandant" and tonumber(unit.player) == 2 then
             redCmdCount = redCmdCount + 1
         end
     end
 
-    if redCmdCount == 1 and boardUnitCount > 0 then
-        appendLog(string.format("- Validation passed (%d units).", boardUnitCount))
-        setStatus("Scenario validation passed.", "ok")
-    else
-        appendLog(string.format("- Validation failed (red commandant count: %d).", redCmdCount))
-        setStatus("Validation failed: need exactly one red commandant.", "error")
+    if not hasBlueUnit or redCmdCount ~= 1 then
+        appendLog(string.format("- Export blocked (blue unit: %s, red commandants: %d).", tostring(hasBlueUnit), redCmdCount))
+        setStatus("Export blocked: need Blue unit and exactly one Red Commandant.", "error")
+        return
     end
+
+    local snapshot, snapshotErr = buildRuntimeScenarioSnapshotFromEditor()
+    if type(snapshot) ~= "table" then
+        setStatus("Cannot export: " .. formatSnapshotBuildError(snapshotErr), "error")
+        return
+    end
+
+    local exportCode = generateExportScenarioCode()
+    local turnsTarget = math.max(1, math.floor(tonumber(scenarioRoundLimit) or 1))
+    local path = "scenarios/" .. exportCode .. ".lua"
+    local dossierPath = SCENARIO_DOSSIER_DIR .. "/" .. exportCode .. ".dossier.lua"
+    local solutionPath = SCENARIO_SOLUTION_DIR .. "/" .. exportCode .. ".solution.lua"
+    local redPolicyConfig = buildScenarioRedPolicyConfig()
+    local exportSolution = buildScenarioExportSolution(exportCode, solutionPath)
+    local solutionContent = buildScenarioExportSolutionContent(exportSolution)
+    local solutionOk, solutionWriteResult = writeScenarioExportFile(solutionPath, solutionContent)
+    if not solutionOk then
+        appendLog("- Export solution failed: " .. tostring(solutionWriteResult))
+        setStatus("Export failed: solution write failed.", "error")
+        return
+    end
+
+    local exportDossier = buildScenarioExportDossier(exportCode, snapshot, turnsTarget, redPolicyConfig, solutionPath)
+    local dossierContent = buildScenarioExportDossierContent(exportDossier)
+    local dossierOk, dossierWriteResult = writeScenarioExportFile(dossierPath, dossierContent)
+    if not dossierOk then
+        appendLog("- Export dossier failed: " .. tostring(dossierWriteResult))
+        setStatus("Export failed: dossier write failed.", "error")
+        return
+    end
+
+    local content = buildScenarioExportContent(exportCode, snapshot, turnsTarget, redPolicyConfig, dossierPath, solutionPath)
+    local ok, writeResult = writeScenarioExportFile(path, content)
+    if not ok then
+        appendLog("- Export failed: " .. tostring(writeResult))
+        setStatus("Export failed.", "error")
+        return
+    end
+
+    scenarioCode = exportCode
+    appendLog("- Exported " .. tostring(writeResult))
+    appendLog("- Dossier " .. tostring(dossierWriteResult))
+    appendLog("- Solution " .. tostring(solutionWriteResult))
+    setStatus("Scenario exported and promoted: " .. exportCode, "ok")
 end
 
 local function onRoundMinus()
+    local previousLimit = scenarioRoundLimit
     scenarioRoundLimit = math.max(1, scenarioRoundLimit - 1)
+    if scenarioRoundLimit ~= previousLimit then
+        markEditorBoardDirty("round_limit_changed")
+    end
     setStatus("Round limit updated.", "info")
 end
 
 local function onRoundPlus()
+    local previousLimit = scenarioRoundLimit
     scenarioRoundLimit = math.min(99, scenarioRoundLimit + 1)
+    if scenarioRoundLimit ~= previousLimit then
+        markEditorBoardDirty("round_limit_changed")
+    end
     setStatus("Round limit updated.", "info")
 end
 
@@ -892,6 +2011,7 @@ local function onChangeFaction()
     else
         unit.player = 1
     end
+    markEditorBoardDirty("unit_faction_changed")
     setStatus("Unit faction changed.", "ok")
 end
 
@@ -912,6 +2032,7 @@ local function onCycleUnit()
             acted = false
         }
         selectedUnitIndex = #editorUnits
+        markEditorBoardDirty("unit_added")
         setStatus("Unit added.", "ok")
         return
     end
@@ -932,6 +2053,7 @@ local function onCycleUnit()
         unit.player = 1
     end
     unit.hp = getUnitBaseHp(unit.name)
+    markEditorBoardDirty("unit_type_changed")
     setStatus("Unit type cycled.", "ok")
 end
 
@@ -948,6 +2070,7 @@ local function onAddRock()
         hp = getUnitBaseHp("Rock")
     }
     selectedUnitIndex = #editorUnits
+    markEditorBoardDirty("rock_added")
     setStatus("Rock added.", "ok")
 end
 
@@ -980,6 +2103,7 @@ local function onAddRedCommandant()
         selectedUnitIndex = #editorUnits
     end
 
+    markEditorBoardDirty("red_commandant_placed")
     setStatus("Red commandant placed.", "ok")
 end
 
@@ -988,7 +2112,11 @@ local function onHpDelta(delta)
     if not unit then
         return
     end
+    local previousHp = unit.hp
     unit.hp = math.max(1, math.min(99, math.floor((tonumber(unit.hp) or 1) + delta)))
+    if unit.hp ~= previousHp then
+        markEditorBoardDirty("unit_hp_changed")
+    end
     setStatus("Unit HP updated.", "ok")
 end
 
@@ -998,6 +2126,7 @@ local function onToggleActed()
         return
     end
     unit.acted = not (unit.acted == true)
+    markEditorBoardDirty("unit_acted_flag_changed")
     setStatus("Acted flag toggled.", "ok")
 end
 
@@ -1008,6 +2137,7 @@ local function onRemoveUnit()
     end
     table.remove(editorUnits, index)
     selectedUnitIndex = nil
+    markEditorBoardDirty("unit_removed")
     setStatus("Unit removed.", "ok")
 end
 
@@ -1024,8 +2154,8 @@ local function triggerSelectedButton(button)
         onNewScenario()
     elseif button == uiButtons.simulate then
         onSimulate()
-    elseif button == uiButtons.validate then
-        onValidate()
+    elseif button == uiButtons.export then
+        onExport()
     elseif button == uiButtons.roundMinus then
         onRoundMinus()
     elseif button == uiButtons.roundPlus then
@@ -1119,7 +2249,11 @@ function scenarioEditor.enter(stateMachine)
     resolveScenarioHeader()
     scenarioCode = normalizeScenarioCode(scenarioCode)
 
-    if not editorInitialized then
+    local defaultPresetKey = buildDefaultEditorPresetKey()
+    if not editorInitialized or editorDefaultPresetKey ~= defaultPresetKey then
+        scenarioCode = DEFAULT_EDITOR_SCENARIO_CODE
+        scenarioRoundLimit = DEFAULT_EDITOR_ROUND_LIMIT
+        defaultPresetKey = buildDefaultEditorPresetKey()
         editorUnits = cloneValue(buildDefaultEditorUnits())
         editorLogLines = {
             "- Simulation started from current editor scenario.",
@@ -1130,6 +2264,9 @@ function scenarioEditor.enter(stateMachine)
         selectCell(1, 1)
         setStatus("Editor ready. Click a unit or a cell.", "info")
         editorInitialized = true
+        editorDefaultPresetKey = defaultPresetKey
+        editorBoardDirtySinceDossier = false
+        editorBoardDirtyReason = nil
     else
         if type(editorLogLines) ~= "table" then
             editorLogLines = {}
@@ -1149,6 +2286,12 @@ function scenarioEditor.enter(stateMachine)
 end
 
 function scenarioEditor.exit()
+    if isGenerationActive() and editorGenerationJob.mode == "thread" and editorGenerationJob.cancelChannel then
+        pcall(function()
+            editorGenerationJob.cancelChannel:push(true)
+        end)
+    end
+    editorGenerationJob = nil
     stateMachineRef = nil
 end
 
@@ -1157,6 +2300,7 @@ function scenarioEditor.update(dt)
         ConfirmDialog.update(dt)
         return
     end
+    stepScenarioGenerationJob()
     updateButtonStates()
 end
 
@@ -1411,6 +2555,10 @@ function scenarioEditor.mousepressed(x, y, button, istouch, presses)
         end
     end
 
+    if isGenerationActive() then
+        return
+    end
+
     local row, col = boardCellAt(tx, ty)
     if row and col then
         boardFocus = true
@@ -1436,6 +2584,16 @@ function scenarioEditor.keypressed(key, scancode, isrepeat)
 
     if key == "escape" then
         onBack()
+        return true
+    end
+
+    if isGenerationActive() then
+        boardFocus = false
+        selectedButtonIndex = 1
+        updateButtonStates()
+        if key == "return" or key == "space" then
+            triggerSelectedButton(uiButtons.back)
+        end
         return true
     end
 

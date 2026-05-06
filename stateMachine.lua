@@ -11,6 +11,7 @@ local states = {
 if SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_MODE then
     states.scenarioSelect = require("scenarioSelect")
     states.scenarioEditor = require("scenarioEditor")
+    states.scenarioGameplay = require("scenarioGameplay")
 end
 local inputBindings = require("input_bindings")
 local steamRuntime = require("steam_runtime")
@@ -20,6 +21,19 @@ local audioRuntime = require("audio_runtime")
 
 local currentState = nil
 local currentStateName = nil
+
+local MENU_MUSIC_STATES = {
+    mainMenu = true,
+    factionSelect = true,
+    onlineLobby = true,
+    onlineLeaderboard = true,
+    scenarioSelect = true,
+    scenarioEditor = true
+}
+local GAMEPLAY_MUSIC_STATES = {
+    gameplay = true,
+    scenarioGameplay = true
+}
 
 local GAMEPAD_BUTTON_TO_ACTION = (((inputBindings or {}).gamepad or {}).buttonToAction) or {}
 local GAMEPAD_AXIS_TO_ACTIONS = (((inputBindings or {}).gamepad or {}).axisToActions) or {}
@@ -1743,6 +1757,14 @@ function stateMachine.changeState(newState)
 
     currentState = states[newState]
     currentStateName = newState
+
+    if GAMEPLAY_MUSIC_STATES[newState] then
+        audioRuntime.playGameplayMusic()
+        audioRuntime.setMusicDucked(false, "state_change")
+    elseif MENU_MUSIC_STATES[newState] then
+        audioRuntime.playMenuMusic()
+        audioRuntime.setMusicDucked(false, "state_change")
+    end
 
     if GAME and GAME.CURRENT then
         GAME.CURRENT.STATE_MACHINE = stateMachine

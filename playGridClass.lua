@@ -140,6 +140,60 @@ function playGridClass:hasActiveAnimations()
     return false
 end
 
+function playGridClass:hasActiveScenarioPolicyBlockingAnimations()
+    if self.movingUnits and #self.movingUnits > 0 then
+        return true
+    end
+
+    if self.spawnBeams and #self.spawnBeams > 0 then
+        return true
+    end
+
+    if self.activeEffects and #self.activeEffects > 0 then
+        return true
+    end
+
+    if self.rangedAttackEffects and #self.rangedAttackEffects > 0 then
+        return true
+    end
+
+    for _, effect in ipairs(self.destructionEffects or {}) do
+        if effect.source ~= "command_hub_defense" then
+            return true
+        end
+    end
+
+    for _, effect in ipairs(self.teslaStrikeEffects or {}) do
+        if effect.source ~= "command_hub_defense" then
+            return true
+        end
+    end
+
+    for _, effect in ipairs(self.impactEffects or {}) do
+        if effect.source ~= "command_hub_defense" then
+            return true
+        end
+    end
+
+    return false
+end
+
+function playGridClass:hasActiveScenarioTurnHandoffAnimations()
+    if self.movingUnits and #self.movingUnits > 0 then
+        return true
+    end
+
+    if self.spawnBeams and #self.spawnBeams > 0 then
+        return true
+    end
+
+    if self.rangedAttackEffects and #self.rangedAttackEffects > 0 then
+        return true
+    end
+
+    return false
+end
+
 -- Helper function to play preview indicator sound
 function playGridClass:playPreviewIndicatorSound()
     -- Only play sound if SFX is enabled and we have cells to show
@@ -830,7 +884,8 @@ function playGridClass:createTeslaStrike(hubRow, hubCol, targetRow, targetCol)
         endPos = {targetCenterX, targetCenterY},
         intensity = 1.0,
         thickness = 18,  -- INCREASED from 12 to 18 (bigger base thickness)
-        phase = "buildup"  -- buildup -> strike -> fade
+        phase = "buildup",  -- buildup -> strike -> fade
+        source = "command_hub_defense"
     }
     
     -- Add to effects list
@@ -897,7 +952,8 @@ function playGridClass:createElectricImpactEffect(x, y)
         system = particleSystem,
         startTime = love.timer.getTime(),
         duration = 0.4,  -- Short duration for sparks
-        type = "electric"
+        type = "electric",
+        source = "command_hub_defense"
     }
 
     -- Add to active effects
@@ -1115,7 +1171,8 @@ function playGridClass:recycleDestructionEffect(effect)
     table.insert(self.destructionEffectPool, effect)
 end
 
-function playGridClass:createDestructionEffect(row, col, playerColor)
+function playGridClass:createDestructionEffect(row, col, playerColor, options)
+    options = options or {}
     local cell = self:getCell(row, col)
     if not cell then return end
 
@@ -1168,6 +1225,7 @@ function playGridClass:createDestructionEffect(row, col, playerColor)
     effect.system = particleSystem
     effect.startTime = love.timer.getTime()
     effect.duration = 1.5
+    effect.source = options.source
     effect.groundY = cell.y + GAME.CONSTANTS.TILE_SIZE - 10
     effect.hasBounceEffect = true
     effect.playerColor = playerColor

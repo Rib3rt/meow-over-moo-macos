@@ -3783,7 +3783,14 @@ function uiClass:isAIControlledPhasePanelTurn(phaseInfo)
     if GAME.CURRENT.MODE == GAME.MODE.AI_VS_AI then
         return true
     end
-    if GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER or GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
+    if GAME.CURRENT.MODE == GAME.MODE.SCENARIO then
+        -- Scenario Mode shows Commandant Defense as its own phase; the
+        -- thinking spinner belongs only to the Red Policy actions window.
+        return phaseInfo.currentPlayer == GAME.CURRENT.AI_PLAYER_NUMBER
+            and phaseInfo.currentPhase == "turn"
+            and phaseInfo.turnPhaseName == "actions"
+    end
+    if GAME.CURRENT.MODE == GAME.MODE.SINGLE_PLAYER then
         return phaseInfo.currentPlayer == GAME.CURRENT.AI_PLAYER_NUMBER
     end
     return false
@@ -4487,10 +4494,13 @@ function uiClass:getPhaseButtonInfo(phaseInfo)
             -- **UPDATED: Never show a button for Commandant phase**
             if self.gameRuler.commandHubDefenseActive then
                 if self.gameRuler.commandHubDefenseComplete then
-                    -- **AUTO-ADVANCE: Automatically go to actions phase**
-                    self.gameRuler:scheduleAction(0.1, function()
-                        self.gameRuler:nextTurnPhase()
-                    end)
+                    local scenarioMode = self.gameRuler.isScenarioMode and self.gameRuler:isScenarioMode()
+                    if not scenarioMode then
+                        -- **AUTO-ADVANCE: Automatically go to actions phase**
+                        self.gameRuler:scheduleAction(0.1, function()
+                            self.gameRuler:nextTurnPhase()
+                        end)
+                    end
                     buttonText = "Advancing to Actions..."
                     buttonDisabled = true
                 else

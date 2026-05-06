@@ -83,6 +83,22 @@ local function normalizeSupplies(value)
     return supplies
 end
 
+local function makeScenarioUnitId(unit, index)
+    local name = tostring(unit and unit.name or "unit")
+    local player = normalizePlayer(unit and unit.player, 0) or 0
+    local row = asWholeNumber(unit and unit.row, 0) or 0
+    local col = asWholeNumber(unit and unit.col, 0) or 0
+    name = name:gsub("%W+", "_"):lower()
+    return table.concat({
+        "scenario",
+        tostring(player),
+        name,
+        tostring(row),
+        tostring(col),
+        tostring(index or 0)
+    }, "_")
+end
+
 local function buildIntegritySignature(boardUnits, playerSupplies)
     local signature = {
         boardUnitTotal = 0,
@@ -114,13 +130,14 @@ function snapshotBuilder.build(config)
 
     local boardUnits = {}
     local commandHubPositions = {}
-    for _, rawUnit in ipairs(config.units or {}) do
+    for sourceIndex, rawUnit in ipairs(config.units or {}) do
         local name = tostring(rawUnit.name or "")
-        local player = normalizePlayer(rawUnit.player, nil)
+        local player = name == "Rock" and 0 or normalizePlayer(rawUnit.player, nil)
         local row = asWholeNumber(rawUnit.row, nil)
         local col = asWholeNumber(rawUnit.col, nil)
         if name ~= "" and player and row and col then
             local unitEntry = {
+                scenarioUnitId = rawUnit.scenarioUnitId or rawUnit.id or makeScenarioUnitId(rawUnit, sourceIndex),
                 name = name,
                 player = player,
                 row = row,

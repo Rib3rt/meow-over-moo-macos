@@ -101,11 +101,13 @@ Configure in `Steamworks > Steam Cloud`.
 Recommended file sync decisions:
 
 - [ ] Sync `OnlineRatingProfile.dat`
+- [ ] Sync `ScenarioProgress.dat`
 - [ ] Decide whether to sync `LastIncompleteMatch.dat`
 
 Recommended:
 
 - [ ] Yes for `OnlineRatingProfile.dat`
+- [ ] Yes for `ScenarioProgress.dat`
 - [ ] Optional for `LastIncompleteMatch.dat`
 
 Cloud setup:
