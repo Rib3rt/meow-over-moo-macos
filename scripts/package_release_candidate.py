@@ -126,8 +126,19 @@ def collect_asset_files(source_root: Path, lua_files: Iterable[Path]) -> Tuple[S
     return assets, sorted(set(unresolved_tokens))
 
 
+def collect_dynamic_runtime_lua(source_root: Path) -> Set[Path]:
+    dynamic_files: Set[Path] = set()
+
+    scenarios_dir = source_root / "scenarios"
+    if scenarios_dir.exists():
+        dynamic_files.update({p for p in scenarios_dir.glob("*.lua") if p.is_file()})
+
+    return dynamic_files
+
+
 def collect_release_files(source_root: Path) -> Tuple[Set[Path], List[str]]:
     lua_files = collect_runtime_lua(source_root)
+    lua_files.update(collect_dynamic_runtime_lua(source_root))
     asset_files, unresolved_assets = collect_asset_files(source_root, lua_files)
 
     redist_dir = source_root / "integrations" / "steam" / "redist"
