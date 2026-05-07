@@ -885,6 +885,15 @@ local function applyPendingScenarioResult(result)
     return solved
 end
 
+local function refreshScenarioRowProgress()
+    progressData = loadProgressData()
+    for _, row in ipairs(scenarioRows) do
+        local progressEntry = getScenarioProgressEntry(row.id)
+        row.attempts = progressEntry.attempts
+        row.solved = progressEntry.solved
+    end
+end
+
 local function listRect()
     local x = LAYOUT.panelMarginX
     local y = LAYOUT.listTop
@@ -1249,6 +1258,8 @@ function scenarioSelect.update(dt)
         return
     end
 
+    applyPendingScenarioResult(consumePendingScenarioResult())
+    refreshScenarioRowProgress()
     clampSelection()
     updateButtonStates()
 end

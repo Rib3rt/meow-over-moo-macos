@@ -193,7 +193,8 @@ local function normalizeData(data)
 end
 
 function scenarioProgress.load()
-    runtimeProgressData = normalizeData(decodeProgress(readRawProgress()) or runtimeProgressData)
+    local rawProgress = readRawProgress()
+    runtimeProgressData = normalizeData(decodeProgress(rawProgress))
     return runtimeProgressData
 end
 
