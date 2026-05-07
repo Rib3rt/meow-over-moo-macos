@@ -23,6 +23,7 @@ local achievementDefs = require("achievement_defs")
 local uiTheme = require("uiTheme")
 local unitsInfo = require("unitsInfo")
 local fontCache = require("fontCache")
+local scenarioProgress = require("scenario_progress")
 
 local MONOGRAM_FONT_PATH = "assets/fonts/monogram-extended.ttf"
 
@@ -3117,12 +3118,14 @@ onlineAutoAdvanceState.maybeShowScenarioOutcomeModal = function()
     end
 
     if GAME and GAME.CURRENT then
-        GAME.CURRENT.SCENARIO_RESULT = {
+        local scenarioResult = {
             id = scenarioId,
             solved = solved,
             attempts = attempts,
             reason = reason
         }
+        GAME.CURRENT.SCENARIO_RESULT = scenarioResult
+        scenarioProgress.applyResult(scenarioResult)
     end
 
     local modalConfig = {

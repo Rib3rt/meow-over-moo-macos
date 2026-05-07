@@ -7,6 +7,7 @@ local scenarioSelect = {}
 local ConfirmDialog = require("confirmDialog")
 local uiTheme = require("uiTheme")
 local soundCache = require("soundCache")
+local scenarioProgress = require("scenario_progress")
 local os = require("os")
 
 local stateMachineRef = nil
@@ -19,7 +20,6 @@ local scenarioRows = {}
 local selectedRowIndex = 1
 local scrollOffsetRows = 0
 local progressData = nil
-local runtimeProgressData = nil
 local scenarioLoadedDefinitionsById = {}
 
 local statusText = "Select a scenario."
@@ -32,19 +32,12 @@ local lastHoveredTarget = nil
 
 local BUTTON_BEEP_SOUND_PATH = "assets/audio/GenericButton14.wav"
 local BUTTON_CLICK_SOUND_PATH = "assets/audio/GenericButton6.wav"
-local SCENARIO_PROGRESS_FILE = "ScenarioProgress.dat"
-local SCENARIO_PROGRESS_VERSION = 1
 local SCENARIO_SCRIPTS_DIR = "scenarios"
 local SCENARIO_EDITOR_FEATURE_ENABLED = SETTINGS and SETTINGS.FEATURES and SETTINGS.FEATURES.SCENARIO_EDITOR == true
 local DEFAULT_SCENARIO_CREATED_BY = "Flippet Cat"
 local PROMOTED_SCENARIO_STATUSES = {
     APPROVED = true,
     PROMOTED = true
-}
-
-runtimeProgressData = {
-    version = SCENARIO_PROGRESS_VERSION,
-    scenarios = {}
 }
 
 local LAYOUT = {
@@ -736,41 +729,16 @@ local function decodeProgress(content)
 end
 
 local function loadProgressData()
-    local persisted = decodeProgress(readRawProgress())
-    runtimeProgressData = type(persisted) == "table" and persisted or runtimeProgressData or {
-        version = SCENARIO_PROGRESS_VERSION,
-        scenarios = {}
-    }
-    runtimeProgressData.version = SCENARIO_PROGRESS_VERSION
-    if type(runtimeProgressData.scenarios) ~= "table" then
-        runtimeProgressData.scenarios = {}
-    end
-    return runtimeProgressData
+    return scenarioProgress.load()
 end
 
 local function saveProgressData(data)
-    if type(data) ~= "table" then
-        return false
-    end
-    data.version = SCENARIO_PROGRESS_VERSION
-    data.scenarios = type(data.scenarios) == "table" and data.scenarios or {}
-    runtimeProgressData = data
-    return writeRawProgress(encodeProgress(data))
+    return scenarioProgress.save(data)
 end
 
 local function getScenarioProgressEntry(scenarioId)
     progressData = progressData or loadProgressData()
-    progressData.scenarios = progressData.scenarios or {}
-    local key = tostring(scenarioId or "")
-    local entry = progressData.scenarios[key]
-    if type(entry) ~= "table" then
-        entry = { attempts = 0, solved = false }
-        progressData.scenarios[key] = entry
-    end
-
-    entry.attempts = math.max(0, tonumber(entry.attempts) or 0)
-    entry.solved = entry.solved == true
-    return entry
+    return scenarioProgress.getEntry(progressData, scenarioId)
 end
 
 local function buildScenarioRows()
@@ -912,27 +880,8 @@ local function consumePendingScenarioResult()
 end
 
 local function applyPendingScenarioResult(result)
-    if type(result) ~= "table" then
-        return nil
-    end
-
-    local scenarioId = tostring(result.id or "")
-    if scenarioId == "" then
-        return nil
-    end
-
-    local entry = getScenarioProgressEntry(scenarioId)
-    local solved = result.solved == true
-    if solved then
-        entry.solved = true
-    end
-
-    local attempts = tonumber(result.attempts)
-    if attempts then
-        entry.attempts = math.max(entry.attempts or 0, math.max(0, math.floor(attempts)))
-    end
-
-    saveProgressData(progressData)
+    local solved = scenarioProgress.applyResult(result)
+    progressData = loadProgressData()
     return solved
 end
 
