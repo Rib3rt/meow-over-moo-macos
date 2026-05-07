@@ -70,13 +70,25 @@ def resolve_required_module(source_root: Path, module_map: Dict[str, Path], modu
     return None
 
 
+def collect_dynamic_runtime_lua(source_root: Path) -> Set[Path]:
+    dynamic_files: Set[Path] = set()
+
+    scenarios_dir = source_root / "scenarios"
+    if scenarios_dir.exists():
+        dynamic_files.update({p for p in scenarios_dir.glob("*.lua") if p.is_file()})
+
+    return dynamic_files
+
+
 def collect_runtime_lua(source_root: Path) -> Set[Path]:
     module_map = discover_module_map(source_root)
+    dynamic_files = collect_dynamic_runtime_lua(source_root)
     entrypoints = [
         source_root / "main.lua",
         source_root / "conf.lua",
         source_root / "globals.lua",
     ]
+    entrypoints.extend(sorted(dynamic_files))
 
     selected: Set[Path] = set()
     queue: List[Path] = [p for p in entrypoints if p.exists()]
@@ -126,19 +138,8 @@ def collect_asset_files(source_root: Path, lua_files: Iterable[Path]) -> Tuple[S
     return assets, sorted(set(unresolved_tokens))
 
 
-def collect_dynamic_runtime_lua(source_root: Path) -> Set[Path]:
-    dynamic_files: Set[Path] = set()
-
-    scenarios_dir = source_root / "scenarios"
-    if scenarios_dir.exists():
-        dynamic_files.update({p for p in scenarios_dir.glob("*.lua") if p.is_file()})
-
-    return dynamic_files
-
-
 def collect_release_files(source_root: Path) -> Tuple[Set[Path], List[str]]:
     lua_files = collect_runtime_lua(source_root)
-    lua_files.update(collect_dynamic_runtime_lua(source_root))
     asset_files, unresolved_assets = collect_asset_files(source_root, lua_files)
 
     redist_dir = source_root / "integrations" / "steam" / "redist"
