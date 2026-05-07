@@ -4,6 +4,8 @@ local STEAM_INPUT_STATE_NAMES = {
     mainMenu = true,
     factionSelect = true,
     gameplay = true,
+    scenarioSelect = true,
+    scenarioGameplay = true,
     onlineLobby = true,
     onlineLeaderboard = true,
 }
