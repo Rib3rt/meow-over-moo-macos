@@ -18,7 +18,13 @@
 
 - Online rating profile: `OnlineRatingProfile.dat`.
 - Scenario solved/attempt progress: `ScenarioProgress.dat`.
-- Steam Cloud should sync both files from the LÖVE save directory.
+- Steam Cloud should sync both files from the LÖVE save directory for identity `MeowOverMoo`.
+- Cross-platform Auto-Cloud should use Windows as the canonical root with OS set to **All OSes**:
+  - root `WinAppDataRoaming`, subdirectory `LOVE/MeowOverMoo`, patterns `OnlineRatingProfile.dat` and `ScenarioProgress.dat`.
+- Add Root Overrides for original root `WinAppDataRoaming`:
+  - macOS -> new root `MacAppSupport`, replace path with `LOVE/MeowOverMoo`.
+  - Linux -> new root `LinuxXdgDataHome`, replace path with `love/MeowOverMoo`.
+- Do not create separate per-OS Auto-Cloud roots without overrides; Steam treats those as platform-partitioned files.
 - Do not sync transient files such as `*.tmp`, `*.bak`, logs, dossiers, or editor exports.
 
 ## Release Defaults

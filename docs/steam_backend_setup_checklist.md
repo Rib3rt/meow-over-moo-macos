@@ -113,9 +113,35 @@ Recommended:
 Cloud setup:
 
 - [ ] Enable Steam Cloud
-- [ ] Add the file patterns / roots
+- [ ] Add the Auto-Cloud roots below
 - [ ] Save
 - [ ] Publish
+
+Required Auto-Cloud paths for LÖVE identity `MeowOverMoo`:
+
+Create these root paths with OS set to **All OSes**:
+
+| Root | Subdirectory | File pattern | Recursive |
+| --- | --- | --- | --- |
+| `WinAppDataRoaming` | `LOVE/MeowOverMoo` | `OnlineRatingProfile.dat` | No |
+| `WinAppDataRoaming` | `LOVE/MeowOverMoo` | `ScenarioProgress.dat` | No |
+
+Then add Root Overrides for the original root `WinAppDataRoaming`:
+
+| Override OS | New root | Add/Replace path | Replace path |
+| --- | --- | --- | --- |
+| macOS | `MacAppSupport` | `LOVE/MeowOverMoo` | Yes |
+| Linux | `LinuxXdgDataHome` | `love/MeowOverMoo` | Yes |
+
+This is important: do not configure separate OS-specific root paths without overrides, because Steam Auto-Cloud partitions those by platform and they will not cross-sync.
+
+Expected local resolved paths:
+
+- Windows: `%USERPROFILE%\AppData\Roaming\LOVE\MeowOverMoo\ScenarioProgress.dat`
+- macOS: `~/Library/Application Support/LOVE/MeowOverMoo/ScenarioProgress.dat`
+- Linux: `$XDG_DATA_HOME/love/MeowOverMoo/ScenarioProgress.dat` or `~/.local/share/love/MeowOverMoo/ScenarioProgress.dat`
+
+Do not Cloud-sync `*.tmp`, `*.bak`, logs, scenario dossiers, or editor exports.
 
 ## 5. Optional Stats
 

@@ -483,6 +483,13 @@ def build_upload_instructions(keep_steam_appid: bool) -> str:
         3. Set the macOS launch option/executable to `{APP_BUNDLE_NAME}`.
         4. Validate the Steam-installed app launches from Steam on Apple Silicon before enabling macOS publicly.
         5. {steam_appid_note}
+
+        Steam Cloud Auto-Cloud setup for cross-platform scenario stats:
+        - Use root WinAppDataRoaming, subdirectory LOVE/MeowOverMoo, OS All OSes.
+        - Add file patterns OnlineRatingProfile.dat and ScenarioProgress.dat.
+        - Add Root Override for macOS: New root MacAppSupport, Replace path LOVE/MeowOverMoo.
+        - Add Root Override for Linux: New root LinuxXdgDataHome, Replace path love/MeowOverMoo.
+        - Do not create separate OS-specific roots without overrides; those do not cross-sync.
         """
     )
 

@@ -379,6 +379,13 @@ def build_upload_instructions(package_root: Path, zip_path: Path | None) -> str:
             "- steam_api64.dll",
             "- steam_input_manifest.vdf",
             "- integrations/steam/redist/win64/",
+            "",
+            "Steam Cloud Auto-Cloud setup for cross-platform scenario stats:",
+            "- Use root WinAppDataRoaming, subdirectory LOVE/MeowOverMoo, OS All OSes.",
+            "- Add file patterns OnlineRatingProfile.dat and ScenarioProgress.dat.",
+            "- Add Root Override for macOS: New root MacAppSupport, Replace path LOVE/MeowOverMoo.",
+            "- Add Root Override for Linux: New root LinuxXdgDataHome, Replace path love/MeowOverMoo.",
+            "- Do not create separate OS-specific roots without overrides; those do not cross-sync.",
         ]
     )
     return "\n".join(lines) + "\n"

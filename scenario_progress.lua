@@ -244,4 +244,23 @@ function scenarioProgress.path()
     return resolveStoragePath()
 end
 
+function scenarioProgress.getDiagnostics()
+    local rawProgress = readRawProgress()
+    local decoded = decodeProgress(rawProgress)
+    local scenarioCount = 0
+    if type(decoded) == "table" and type(decoded.scenarios) == "table" then
+        for _ in pairs(decoded.scenarios) do
+            scenarioCount = scenarioCount + 1
+        end
+    end
+
+    return {
+        fileName = PROGRESS_FILE,
+        storagePath = resolveStoragePath(),
+        exists = type(rawProgress) == "string",
+        version = type(decoded) == "table" and decoded.version or nil,
+        scenarioCount = scenarioCount
+    }
+end
+
 return scenarioProgress
