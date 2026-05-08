@@ -62,15 +62,16 @@ runTest("main_menu_scenario_mode_feature_enabled", function()
     assertTrue(content:find("SCENARIO_MODE = true", 1, true) ~= nil, "scenario mode should be enabled for the main menu entry")
 end)
 
-runTest("scenario_editor_feature_enabled_for_manual_scenario_work", function()
+runTest("scenario_editor_feature_hidden_for_release_candidate", function()
     local globals = readFile("globals.lua")
     assertTrue(type(globals) == "string", "globals.lua not readable")
-    assertTrue(globals:find("SCENARIO_EDITOR = true", 1, true) ~= nil, "scenario editor should be enabled for manual scenario work")
+    assertTrue(globals:find("SCENARIO_EDITOR = false", 1, true) ~= nil, "scenario editor should be hidden for the release candidate")
 
     local selectScreen = readFile("scenarioSelect.lua")
     assertTrue(type(selectScreen) == "string", "scenarioSelect.lua not readable")
     assertTrue(selectScreen:find("SCENARIO_EDITOR_FEATURE_ENABLED", 1, true) ~= nil, "scenario select should use the editor feature flag")
     assertTrue(selectScreen:find("if SCENARIO_EDITOR_FEATURE_ENABLED then", 1, true) ~= nil, "scenario select should create the editor button only when enabled")
+    assertTrue(selectScreen:find('text = "EDITOR"', 1, true) ~= nil, "scenario select should keep the internal editor button behind the flag")
 end)
 
 runTest("scenario_editor_new_scenario_uses_editor_async_generation_contract", function()
