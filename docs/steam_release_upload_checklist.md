@@ -22,7 +22,7 @@ Status: Completed for the current market release baseline, including Scenario Mo
 - [x] Steam launch + overlay validated.
 - [x] Achievements and leaderboard validated.
 - [x] Online + local multiplayer validated.
-- [x] Scenario Mode list/runtime validated with `P001`-`P010`.
+- [x] Scenario Mode list/runtime validated with `P002`-`P011`.
 - [x] Scenario progress persistence validated for `ScenarioProgress.dat`.
 - [x] Steam Deck launch + controller flow validated.
 

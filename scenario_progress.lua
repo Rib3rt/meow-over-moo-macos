@@ -216,6 +216,22 @@ function scenarioProgress.getEntry(data, scenarioId)
     return entry
 end
 
+function scenarioProgress.recordAttempt(scenarioId)
+    local key = tostring(scenarioId or "")
+    if key == "" then
+        return nil, false
+    end
+
+    local data = scenarioProgress.load()
+    local entry = scenarioProgress.getEntry(data, key)
+    local currentAttempts = math.max(0, math.floor(tonumber(entry.attempts) or 0))
+    entry.attempts = currentAttempts + 1
+    entry.solved = entry.solved == true
+
+    local saved = scenarioProgress.save(data)
+    return entry, saved
+end
+
 function scenarioProgress.applyResult(result)
     if type(result) ~= "table" then
         return nil

@@ -1,5 +1,7 @@
 package.path = package.path .. ";./?.lua"
 
+local unitsInfo = require("unitsInfo")
+
 local results = {}
 
 local function runTest(name, fn)
@@ -60,14 +62,8 @@ local function boardSignature(snapshot)
     return table.concat(parts, "|")
 end
 
-runTest("public_p001_p002_are_promoted_release_levels", function()
+runTest("public_p002_is_promoted_release_level", function()
     local expected = {
-        P001 = {
-            originalExportId = "Scenario#20260505115547-384",
-            blue = 2,
-            red = 3,
-            neutral = 0
-        },
         P002 = {
             originalExportId = "Scenario#20260505171632-565",
             blue = 2,
@@ -107,10 +103,10 @@ runTest("public_p001_p002_are_promoted_release_levels", function()
         assertTrue(type(snapshot.commandHubPositions[2]) == "table", scenarioId .. " missing Red Commandant hub position")
         signatures[scenarioId] = boardSignature(snapshot)
     end
-    assertTrue(signatures.P001 ~= signatures.P002, "P001 and P002 must be different promoted boards")
+    assertTrue(signatures.P002 ~= nil, "P002 signature should be captured")
 end)
 
-runTest("scenario_directory_contains_public_p001_through_p010", function()
+runTest("scenario_directory_contains_public_p002_through_p011", function()
     local pipe = io.popen("find scenarios -maxdepth 1 -type f -name '*.lua' | sort")
     assertTrue(pipe ~= nil, "failed to enumerate scenarios")
     local paths = {}
@@ -118,34 +114,52 @@ runTest("scenario_directory_contains_public_p001_through_p010", function()
         paths[#paths + 1] = line
     end
     pipe:close()
-    assertTrue(#paths == 10, "P001 through P010 should be public scenario files")
-    assertTrue(paths[1] == "scenarios/P001.lua", "P001 should be first public scenario")
-    assertTrue(paths[2] == "scenarios/P002.lua", "P002 should be second public scenario")
-    assertTrue(paths[3] == "scenarios/P003.lua", "P003 should be the manual test scenario")
-    assertTrue(paths[4] == "scenarios/P004.lua", "P004 should be the fourth public scenario")
-    assertTrue(paths[5] == "scenarios/P005.lua", "P005 should be the fifth public scenario")
-    assertTrue(paths[6] == "scenarios/P006.lua", "P006 should be the sixth public scenario")
-    assertTrue(paths[7] == "scenarios/P007.lua", "P007 should be the seventh public scenario")
-    assertTrue(paths[8] == "scenarios/P008.lua", "P008 should be the eighth public scenario")
-    assertTrue(paths[9] == "scenarios/P009.lua", "P009 should be the ninth public scenario")
-    assertTrue(paths[10] == "scenarios/P010.lua", "P010 should be the tenth public scenario")
+    assertTrue(#paths == 10, "P002 through P011 should be public scenario files")
+    assertTrue(paths[1] == "scenarios/P002.lua", "P002 should be first public scenario")
+    assertTrue(paths[2] == "scenarios/P003.lua", "P003 should be second public scenario")
+    assertTrue(paths[3] == "scenarios/P004.lua", "P004 should be third public scenario")
+    assertTrue(paths[4] == "scenarios/P005.lua", "P005 should be fourth public scenario")
+    assertTrue(paths[5] == "scenarios/P006.lua", "P006 should be fifth public scenario")
+    assertTrue(paths[6] == "scenarios/P007.lua", "P007 should be sixth public scenario")
+    assertTrue(paths[7] == "scenarios/P008.lua", "P008 should be seventh public scenario")
+    assertTrue(paths[8] == "scenarios/P009.lua", "P009 should be eighth public scenario")
+    assertTrue(paths[9] == "scenarios/P010.lua", "P010 should be ninth public scenario")
+    assertTrue(paths[10] == "scenarios/P011.lua", "P011 should be tenth public scenario")
 end)
 
-runTest("manual_p003_is_distinct_n3_breach_doubt_candidate", function()
+runTest("public_scenarios_do_not_depend_on_over_base_hp", function()
+    for index = 2, 11 do
+        local path = string.format("scenarios/P%03d.lua", index)
+        local scenario = loadScenario(path)
+        for _, unit in ipairs((scenario.startSnapshot or {}).boardUnits or {}) do
+            local info = unitsInfo:getUnitInfo(unit.name)
+            local baseHp = info and tonumber(info.startingHp or info.hp) or nil
+            assertTrue(baseHp ~= nil, path .. " unknown unit type " .. tostring(unit.name))
+            local currentHp = tonumber(unit.currentHp)
+            assertTrue(currentHp ~= nil, path .. " unit missing currentHp")
+            assertTrue(
+                currentHp <= baseHp,
+                string.format("%s %s at %s,%s has impossible HP %s/%s", path, tostring(unit.name), tostring(unit.row), tostring(unit.col), tostring(currentHp), tostring(baseHp))
+            )
+        end
+    end
+end)
+
+runTest("manual_p003_is_distinct_four_turn_capture_discipline", function()
     local scenario = loadScenario("scenarios/P003.lua")
     assertTrue(scenario.id == "P003", "manual test scenario id mismatch")
     assertTrue(scenario.name == "Scenario P003", "P003 public name should stay numeric")
-    assertTrue(scenario.turnLimitRounds == 3, "P003 should test the N=3 manual breach-doubt puzzle path")
-    assertTrue(scenario.promotion.source == "manual_playtest_breach_doubt_candidate", "P003 should be marked as a manual breach-doubt playtest candidate")
+    assertTrue(scenario.turnLimitRounds == 4, "P003 should test the four-turn capture-discipline puzzle path")
+    assertTrue(scenario.promotion.source == "manual_playtest_capture_discipline_4", "P003 should be marked as the capture-discipline playtest")
     assertTrue(type(scenario.scenarioRedPolicy) == "table", "P003 must use Scenario Red Policy")
     assertTrue(scenario.scenarioRedPolicy.runtime == "scenarioRedRuntime", "P003 must use the shipped scenario runtime policy")
-    assertTrue(#(scenario.scenarioRedPolicy.criticalBlueUnitIds or {}) == 3, "P003 should declare the three ambiguous Blue ground roles")
+    assertTrue(#(scenario.scenarioRedPolicy.criticalBlueUnitIds or {}) == 3, "P003 should declare the finisher, opener, and screen roles")
 
     local snapshot = scenario.startSnapshot
     local counts, redCommandants = countBoardUnitsByPlayer(snapshot)
-    assertTrue((counts[1] or 0) == 3, "P003 should use three Blue ground units")
-    assertTrue((counts[2] or 0) == 3, "P003 should include Commandant, contact blocker, and active Red pressure")
-    assertTrue((counts[0] or 0) == 0, "P003 breach-doubt should not rely on neutral Rock locks")
+    assertTrue((counts[1] or 0) == 3, "P003 should use three Blue role units")
+    assertTrue((counts[2] or 0) == 3, "P003 should include Commandant plus two active Red pressure units")
+    assertTrue((counts[0] or 0) == 2, "P003 should include two neutral route locks")
     assertTrue(redCommandants == 1, "P003 needs exactly one Red Commandant")
 end)
 
@@ -163,15 +177,15 @@ runTest("retired_save_exports_are_not_left_for_discovery", function()
     assertTrue(#paths == 0, "retired exported scenarios should not be discoverable from save directory")
 end)
 
-runTest("public_p001_is_playable_and_manually_promoted", function()
-    local path = "scenarios/P001.lua"
+runTest("public_p002_is_playable_and_manually_promoted", function()
+    local path = "scenarios/P002.lua"
     local scenario = loadScenario(path)
-    assertTrue(scenario.id == "P001", "exported scenario id mismatch")
+    assertTrue(scenario.id == "P002", "exported scenario id mismatch")
     assertTrue(scenario.status == "PROMOTED", "editor export should be manually promoted")
     assertTrue(type(scenario.promotion) == "table", "editor export should include promotion metadata")
     assertTrue(scenario.promotion.state == "promoted", "editor export promotion state should be promoted")
     assertTrue(scenario.promotion.approved == true, "editor export should carry manual approval")
-    assertTrue(scenario.promotion.source == "verified_export_promoted_to_public_slot", "public slot should record verified export promotion source")
+    assertTrue(scenario.promotion.source == "scenario_editor_manual_export_promoted_to_public_slot", "public slot should record verified export promotion source")
     assertTrue(scenario.turnLimitRounds == 3, "exported scenario should preserve editor turn limit")
     assertTrue(type(scenario.scenarioRedPolicy) == "table", "exported scenario must include Scenario Red Policy metadata")
     assertTrue(scenario.scenarioRedPolicy.runtime == "scenarioRedRuntime", "exported scenario must use shipped scenario red runtime")
@@ -192,8 +206,8 @@ runTest("public_p001_is_playable_and_manually_promoted", function()
     assertTrue(type(snapshot.commandHubPositions[2]) == "table", "exported scenario missing Red Commandant hub position")
 end)
 
-runTest("p001_is_explicitly_promoted", function()
-    local scenario = loadScenario("scenarios/P001.lua")
+runTest("p002_is_explicitly_promoted", function()
+    local scenario = loadScenario("scenarios/P002.lua")
     assertTrue(scenario.status == "PROMOTED", "public scenario must be explicitly promoted")
     assertTrue(type(scenario.promotion) == "table", "public scenario should include promotion metadata")
     assertTrue(scenario.promotion.approved == true, "public scenario should be marked approved")

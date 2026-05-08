@@ -7,13 +7,13 @@ return {
     promotion = {
         state = "promoted",
         approved = true,
-        source = "manual_playtest_breach_doubt_candidate"
+        source = "manual_playtest_capture_discipline_4"
     },
     objectiveType = "destroy_commandant",
-    objectiveMessage = "Blue to move. Destroy the enemy Commandant within 3 turns.",
-    objectiveText = "Blue to move. Destroy the enemy Commandant within 3 turns.",
+    objectiveMessage = "Blue to move. Destroy the enemy Commandant within 4 turns.",
+    objectiveText = "Blue to move. Destroy the enemy Commandant within 4 turns.",
     sideToMove = "Blue",
-    turnLimitRounds = 3,
+    turnLimitRounds = 4,
     scenarioRedPolicy = {
         runtime = "scenarioRedRuntime",
         policy = "scenarioRedPolicy",
@@ -22,13 +22,14 @@ return {
         seed = 303,
         criticalBlueUnitIds = {
             "blue_finisher",
-            "blue_breaker",
-            "blue_decoy"
+            "blue_opener",
+            "blue_screen"
         },
         requiredCells = {
-            { row = 3, col = 4 },
-            { row = 3, col = 5 },
-            { row = 5, col = 5 }
+            { row = 6, col = 4 },
+            { row = 4, col = 7 },
+            { row = 4, col = 4 },
+            { row = 3, col = 4 }
         }
     },
     startSnapshot = snapshotBuilder.build({
@@ -43,57 +44,75 @@ return {
         },
         units = {
             {
-                id = "blue_breaker",
-                name = "Earthstalker",
-                player = 1,
-                row = 5,
-                col = 4,
-                currentHp = 2,
-                startingHp = 3
-            },
-            {
                 id = "blue_finisher",
                 name = "Crusher",
                 player = 1,
-                row = 7,
-                col = 5,
+                row = 8,
+                col = 4,
                 currentHp = 4,
                 startingHp = 4
             },
             {
-                id = "blue_decoy",
-                name = "Bastion",
+                id = "blue_opener",
+                name = "Cloudstriker",
+                player = 1,
+                row = 7,
+                col = 7,
+                currentHp = 4,
+                startingHp = 4
+            },
+            {
+                id = "blue_screen",
+                name = "Earthstalker",
                 player = 1,
                 row = 5,
-                col = 7,
-                currentHp = 6,
-                startingHp = 6
+                col = 6,
+                currentHp = 3,
+                startingHp = 3
             },
             {
                 id = "red_commandant",
                 name = "Commandant",
                 player = 2,
                 row = 2,
-                col = 5,
+                col = 4,
                 currentHp = 4,
                 startingHp = 12
             },
             {
-                id = "red_contact_blocker",
-                name = "Bastion",
-                player = 2,
-                row = 3,
-                col = 5,
+                id = "neutral_gate",
+                name = "Rock",
+                player = 0,
+                row = 4,
+                col = 4,
                 currentHp = 2,
-                startingHp = 6
+                startingHp = 5
             },
             {
-                id = "red_breaker_hunter",
-                name = "Earthstalker",
+                id = "neutral_guard",
+                name = "Rock",
+                player = 0,
+                row = 3,
+                col = 4,
+                currentHp = 3,
+                startingHp = 5
+            },
+            {
+                id = "red_battery",
+                name = "Artillery",
+                player = 2,
+                row = 6,
+                col = 1,
+                currentHp = 5,
+                startingHp = 5
+            },
+            {
+                id = "red_lure",
+                name = "Wingstalker",
                 player = 2,
                 row = 5,
-                col = 2,
-                currentHp = 3,
+                col = 7,
+                currentHp = 2,
                 startingHp = 3
             }
         }

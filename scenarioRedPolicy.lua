@@ -555,6 +555,54 @@ local function chooseFallbackBlueTarget(state, redUnit)
     return blues[1]
 end
 
+local function cloneStateWithUnitAt(state, unit, row, col)
+    if not unit then
+        return state, nil
+    end
+    local movedState = stateEngine.cloneState(state)
+    local movedUnit = nil
+    local i
+    for i = 1, #(movedState.units or {}) do
+        local candidate = movedState.units[i]
+        if stableString(candidate.id) == stableString(unit.id) then
+            candidate.row = row
+            candidate.col = col
+            movedUnit = candidate
+            break
+        end
+    end
+    return movedState, movedUnit
+end
+
+local function attackPositionDistance(state, redUnit, row, col, target)
+    if not redUnit or not target then
+        return INF_DISTANCE
+    end
+
+    local movedState, movedUnit = cloneStateWithUnitAt(state, redUnit, row, col)
+    if movedUnit and canFastAttackTarget(movedState, movedUnit, target) then
+        return 0
+    end
+
+    local rowDiff = math.abs(toNumber(target.row, 0) - toNumber(row, 0))
+    local colDiff = math.abs(toNumber(target.col, 0) - toNumber(col, 0))
+    local distance = rowDiff + colDiff
+    local stats = unitStats(redUnit.name) or {}
+    local maxRange = toNumber(stats.atkRange, 1)
+    local isRanged = redUnit.name == "Cloudstriker" or redUnit.name == "Artillery"
+    local minRange = isRanged and 2 or 1
+
+    if distance < minRange then
+        return minRange - distance
+    end
+    if distance > maxRange then
+        return distance - maxRange
+    end
+
+    -- In range but not a legal firing cell, usually because of line/shape rules.
+    return 1
+end
+
 local function fallbackTargetDistance(state, action)
     if type(action) ~= "table" or action.type ~= "move" then
         return INF_DISTANCE
@@ -565,8 +613,7 @@ local function fallbackTargetDistance(state, action)
         return INF_DISTANCE
     end
     local to = action.to or {}
-    return math.abs(toNumber(to.row, redUnit.row) - toNumber(target.row, 0))
-        + math.abs(toNumber(to.col, redUnit.col) - toNumber(target.col, 0))
+    return attackPositionDistance(state, redUnit, toNumber(to.row, redUnit.row), toNumber(to.col, redUnit.col), target)
 end
 
 local function fallbackTargetBeforeDistance(state, action)
@@ -578,8 +625,7 @@ local function fallbackTargetBeforeDistance(state, action)
     if not redUnit or not target then
         return INF_DISTANCE
     end
-    return math.abs(toNumber(redUnit.row, 0) - toNumber(target.row, 0))
-        + math.abs(toNumber(redUnit.col, 0) - toNumber(target.col, 0))
+    return attackPositionDistance(state, redUnit, toNumber(redUnit.row, 0), toNumber(redUnit.col, 0), target)
 end
 
 local function planForm(actions)

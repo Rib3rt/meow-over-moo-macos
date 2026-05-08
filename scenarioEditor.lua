@@ -20,8 +20,8 @@ local lastHoveredTarget = nil
 local selectedCell = { row = 1, col = 1 }
 local selectedUnitIndex = nil
 
-local DEFAULT_EDITOR_SCENARIO_CODE = "P010"
-local DEFAULT_EDITOR_ROUND_LIMIT = 5
+local DEFAULT_EDITOR_SCENARIO_CODE = "P003"
+local DEFAULT_EDITOR_ROUND_LIMIT = 4
 
 local scenarioCode = DEFAULT_EDITOR_SCENARIO_CODE
 local scenarioRoundLimit = DEFAULT_EDITOR_ROUND_LIMIT
@@ -427,10 +427,10 @@ local function makeScenarioUnitId(unit, index)
 end
 
 local function normalizeScenarioCode(rawCode)
-    local value = tostring(rawCode or "P001")
+    local value = tostring(rawCode or "P002")
     value = value:gsub("^%s+", ""):gsub("%s+$", "")
     if value == "" then
-        return "P001"
+        return "P002"
     end
     return value
 end
@@ -471,15 +471,14 @@ end
 
 local function buildDefaultEditorUnits()
     return {
-        {scenarioUnitId = "blue_breaker", name = "Artillery", player = 1, row = 8, col = 4, hp = 5},
-        {scenarioUnitId = "blue_finisher", name = "Cloudstriker", player = 1, row = 1, col = 8, hp = 4},
-        {scenarioUnitId = "blue_decoy", name = "Bastion", player = 1, row = 4, col = 6, hp = 2},
-        {scenarioUnitId = "blue_screen", name = "Wingstalker", player = 1, row = 8, col = 5, hp = 3},
-        {scenarioUnitId = "red_commandant", name = "Commandant", player = 2, row = 1, col = 2, hp = 3},
-        {scenarioUnitId = "neutral_gate", name = "Rock", player = 0, row = 1, col = 4, hp = 2},
-        {scenarioUnitId = "neutral_screen", name = "Rock", player = 0, row = 3, col = 5, hp = 5},
-        {scenarioUnitId = "red_hunter", name = "Crusher", player = 2, row = 7, col = 5, hp = 4},
-        {scenarioUnitId = "red_sniper", name = "Cloudstriker", player = 2, row = 4, col = 5, hp = 3}
+        {scenarioUnitId = "blue_finisher", name = "Crusher", player = 1, row = 6, col = 8, hp = 4},
+        {scenarioUnitId = "blue_bait", name = "Bastion", player = 1, row = 8, col = 4, hp = 3},
+        {scenarioUnitId = "blue_interceptor", name = "Earthstalker", player = 1, row = 7, col = 5, hp = 3},
+        {scenarioUnitId = "blue_false_decoy", name = "Wingstalker", player = 1, row = 8, col = 3, hp = 3},
+        {scenarioUnitId = "red_commandant", name = "Commandant", player = 2, row = 2, col = 4, hp = 4},
+        {scenarioUnitId = "red_hunter", name = "Earthstalker", player = 2, row = 6, col = 4, hp = 3},
+        {scenarioUnitId = "red_sniper", name = "Cloudstriker", player = 2, row = 6, col = 3, hp = 4},
+        {scenarioUnitId = "red_guard", name = "Wingstalker", player = 2, row = 5, col = 1, hp = 3}
     }
 end
 
@@ -827,8 +826,9 @@ local function buildRuntimeScenarioSnapshotFromEditor()
                 name = "Bastion"
             end
 
-            local currentHp = math.floor(tonumber(rawUnit.hp) or getUnitBaseHp(name))
-            currentHp = math.max(1, currentHp)
+            local baseHp = getUnitBaseHp(name)
+            local currentHp = math.floor(tonumber(rawUnit.hp) or baseHp)
+            currentHp = math.max(1, math.min(baseHp, currentHp))
 
             local unitEntry = {
                 scenarioUnitId = rawUnit.scenarioUnitId or rawUnit.id or makeScenarioUnitId({
@@ -842,7 +842,7 @@ local function buildRuntimeScenarioSnapshotFromEditor()
                 name = name,
                 player = player,
                 currentHp = currentHp,
-                startingHp = getUnitBaseHp(name),
+                startingHp = baseHp,
                 hasActed = rawUnit.acted == true,
                 turnActions = {}
             }

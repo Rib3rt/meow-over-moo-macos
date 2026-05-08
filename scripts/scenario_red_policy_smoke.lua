@@ -145,6 +145,28 @@ runTest("red_policy_spends_mandatory_action_by_advancing_toward_best_blue_target
     assertTrue(hasReason(record, "fallback_toward_nearest_blue"), "fallback movement reason expected")
 end)
 
+runTest("red_policy_cloudstriker_fallback_moves_to_firing_band_not_adjacent_dead_zone", function()
+    local sample = state({
+        unit("blue_false_decoy", "Wingstalker", 1, 2, 3, 2, 3, { hasMoved = true, hasActed = true, turnActions = { move = true, attack = true } }),
+        unit("blue_finisher", "Crusher", 1, 6, 8, 4, 4),
+        unit("red_sniper", "Cloudstriker", 2, 6, 3, 4, 4),
+        unit("red_guard", "Wingstalker", 2, 5, 1, 3, 3),
+        unit("red_hunter", "Earthstalker", 2, 8, 5, 3, 3, { hasMoved = true, hasActed = true, turnActions = { move = true, attack = true } }),
+        unit("red_commandant", "Commandant", 2, 2, 4, 3, 12)
+    })
+    sample.scenarioTurn = 2
+    sample.turnActions = 1
+    sample.maxActionsPerTurn = 2
+
+    local action, record = redPolicy.chooseAction(sample, { seed = "cloud-fallback-band" })
+
+    assertEquals(action.type, "move", "Red should spend the remaining action with a reposition")
+    assertEquals(action.actorId, "red_sniper", "Cloudstriker should be the relevant fallback mover")
+    assertEquals(action.to.row, 4, "Cloudstriker should stop at non-adjacent firing distance")
+    assertEquals(action.to.col, 3, "Cloudstriker should preserve the C-file shot")
+    assertTrue(hasReason(record, "fallback_toward_nearest_blue"), "fallback movement reason expected")
+end)
+
 runTest("red_policy_kill_priority_beats_non_kill_direct_threat_damage", function()
     local sample = state({
         unit("blue_direct_threat", "Crusher", 1, 3, 4, 4, 4),
@@ -336,12 +358,12 @@ runTest("runtime_state_uses_stable_scenario_unit_ids_after_movement", function()
     assertEquals(afterRed.col, 5, "stable id should follow the moved unit")
 end)
 
-runTest("p001_advertised_turn_limit_matches_current_contract_label", function()
-    local scenario = dofile("scenarios/P001.lua")
-    assertEquals(scenario.turnLimitRounds, 3, "P001 should advertise the certified three-turn contract")
-    assertTrue(tostring(scenario.objectiveText or ""):find("3 turns", 1, true) ~= nil, "P001 objective text should match turn limit")
+runTest("p002_advertised_turn_limit_matches_current_contract_label", function()
+    local scenario = dofile("scenarios/P002.lua")
+    assertEquals(scenario.turnLimitRounds, 3, "P002 should advertise the certified three-turn contract")
+    assertTrue(tostring(scenario.objectiveText or ""):find("3 turns", 1, true) ~= nil, "P002 objective text should match turn limit")
     for index, unitState in ipairs(scenario.startSnapshot and scenario.startSnapshot.boardUnits or {}) do
-        assertTrue(type(unitState.scenarioUnitId) == "string" and unitState.scenarioUnitId ~= "", "P001 board unit needs stable scenarioUnitId at index " .. tostring(index))
+        assertTrue(type(unitState.scenarioUnitId) == "string" and unitState.scenarioUnitId ~= "", "P002 board unit needs stable scenarioUnitId at index " .. tostring(index))
     end
 end)
 

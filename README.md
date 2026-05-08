@@ -28,7 +28,7 @@ See [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) for the current snapshot.
 - Feature is enabled by the build-time gate `SETTINGS.FEATURES.SCENARIO_MODE`.
 - Main menu entry: `PLAY SCENARIO` (first button when scenario mode is enabled).
 - Dedicated flow: scenario list -> scenario gameplay (no setup/faction/supply flow).
-- Scenario list ships 10 promoted scenarios (`P001` through `P010`).
+- Scenario list ships 10 promoted scenarios (`P002` through `P011`).
 - Scenario editor is gated separately by `SETTINGS.FEATURES.SCENARIO_EDITOR`; it is hidden for the release candidate.
 - Scenario list entries open playable Scenario Mode runtime, not UI-only previews.
 - Scenario Mode Red turns use the shipped `scenarioRedRuntime` / `scenarioRedPolicy` path, backed by shipped scenario state/rule modules rather than internal generator/proof tooling.

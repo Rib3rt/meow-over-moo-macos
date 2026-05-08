@@ -6,6 +6,7 @@ local uiTheme = require("uiTheme")
 local fontCache = require("fontCache")
 local soundCache = require("soundCache")
 local Factions = require("factions")
+local scenarioProgress = require("scenario_progress")
 local MONOGRAM_FONT_PATH = "assets/fonts/monogram-extended.ttf"
 
 local function getMonogramFont(size)
@@ -701,8 +702,14 @@ function uiClass:triggerScenarioRetryAction()
 
             local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
             if type(scenarioState) == "table" then
-                scenarioState.attempts = math.max(0, tonumber(scenarioState.attempts) or 0) + 1
-                scenarioState.solved = false
+                local progressEntry = scenarioProgress.recordAttempt(scenarioState.id)
+                if type(progressEntry) == "table" then
+                    scenarioState.attempts = math.max(0, math.floor(tonumber(progressEntry.attempts) or 0))
+                    scenarioState.solved = progressEntry.solved == true
+                else
+                    scenarioState.attempts = math.max(0, math.floor(tonumber(scenarioState.attempts) or 0)) + 1
+                end
+                scenarioState.attemptRecorded = true
             end
             if GAME and GAME.CURRENT and GAME.MODE then
                 GAME.CURRENT.SCENARIO_RESULT = nil

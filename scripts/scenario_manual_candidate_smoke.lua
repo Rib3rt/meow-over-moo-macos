@@ -1,6 +1,7 @@
 package.path = package.path .. ";./?.lua"
 
 local redPolicy = require("scenarioRedPolicy")
+local scenarioRedRuntime = require("scenarioRedRuntime")
 local stateEngine = require("scenarioStateEngine")
 local rulesKernel = require("scenarioRulesKernel")
 local unitsInfo = require("unitsInfo")
@@ -171,7 +172,8 @@ local function applyCommandantDefense(state)
     for _, direction in ipairs(directions) do
         local index, target = findUnitAt(nextState, commandant.row + direction.row, commandant.col + direction.col)
         if target and target.player ~= nextState.currentPlayer then
-            local damage = tonumber(unitsInfo:calculateAttackDamage(commandant, target)) or 0
+            local damageValue = unitsInfo:calculateAttackDamage(commandant, target)
+            local damage = tonumber(damageValue) or 0
             target.currentHp = (tonumber(target.currentHp) or 0) - damage
             if target.currentHp <= 0 then
                 table.remove(nextState.units, index)
@@ -220,6 +222,54 @@ local function commandantHp(state)
         end
     end
     return 0
+end
+
+local function runtimeCommandFromState(state, scenario)
+    local board = {}
+    for _, unit in ipairs(state.units or {}) do
+        board[tostring(unit.row) .. ":" .. tostring(unit.col)] = {
+            scenarioUnitId = unit.id,
+            name = unit.name,
+            player = unit.player,
+            currentHp = unit.currentHp,
+            startingHp = unit.startingHp,
+            hasMoved = unit.hasMoved,
+            hasActed = unit.hasActed,
+            turnActions = unit.turnActions or {}
+        }
+    end
+    local grid = {
+        rows = 8,
+        cols = 8,
+        getUnitAt = function(_, row, col)
+            return board[tostring(row) .. ":" .. tostring(col)]
+        end
+    }
+    local ruler = {
+        currentGrid = grid,
+        currentPlayer = state.currentPlayer,
+        currentTurn = state.scenarioTurn,
+        currentTurnActions = state.turnActions,
+        maxActionsPerTurn = state.maxActionsPerTurn
+    }
+    local previousGame = GAME
+    GAME = {
+        CURRENT = {
+            SCENARIO = {
+                turnsTarget = scenario.turnLimitRounds,
+                scenarioRedPolicy = scenario.scenarioRedPolicy
+            }
+        }
+    }
+    local command, record = scenarioRedRuntime.chooseCommand(ruler, grid, {
+        scenario = {
+            id = scenario.id,
+            turnsTarget = scenario.turnLimitRounds,
+            scenarioRedPolicy = scenario.scenarioRedPolicy
+        }
+    })
+    GAME = previousGame
+    return command, record
 end
 
 local function blueActionSequences(state)
@@ -274,78 +324,147 @@ local function hasTwoTurnBlueWinEvenIfRedPasses(state)
     return false, nil
 end
 
-runTest("p003_uses_three_ground_blue_units_with_ambiguous_roles", function()
+runTest("p003_material_has_four_turn_capture_discipline", function()
     local scenario = loadScenario("scenarios/P003.lua")
     local state = scenarioToState(scenario)
-    local _, breaker = findUnitIndex(state, "blue_breaker")
     local _, finisher = findUnitIndex(state, "blue_finisher")
-    local _, decoy = findUnitIndex(state, "blue_decoy")
-    local _, blocker = findUnitIndex(state, "red_contact_blocker")
-    local _, hunter = findUnitIndex(state, "red_breaker_hunter")
+    local _, opener = findUnitIndex(state, "blue_opener")
+    local _, screen = findUnitIndex(state, "blue_screen")
+    local _, commandant = findUnitIndex(state, "red_commandant")
+    local _, gate = findUnitIndex(state, "neutral_gate")
+    local _, guard = findUnitIndex(state, "neutral_guard")
+    local _, battery = findUnitIndex(state, "red_battery")
+    local _, lure = findUnitIndex(state, "red_lure")
 
-    assertEquals(scenario.turnLimitRounds, 3, "new P003 should be a three-turn breach candidate")
-    assertEquals(scenario.promotion.source, "manual_playtest_breach_doubt_candidate", "P003 should record the new manual playtest source")
-    assertTrue(breaker and breaker.name == "Earthstalker" and breaker.player == BLUE, "Blue Earthstalker breaker missing")
-    assertTrue(finisher and finisher.name == "Crusher" and finisher.player == BLUE, "Blue Crusher candidate missing")
-    assertTrue(decoy and decoy.name == "Bastion" and decoy.player == BLUE, "Blue Bastion candidate missing")
-    assertTrue(blocker and blocker.name == "Bastion", "Red contact blocker missing")
-    assertTrue(hunter and hunter.name == "Earthstalker", "Red breaker hunter missing")
-    assertTrue(findUnitIndex(state, "blue_guard") == nil, "retired escort Bastion id should not remain")
-    assertTrue(findUnitIndex(state, "blue_sacrifice") == nil, "retired sacrificial Earthstalker should not remain")
-    assertTrue(findUnitIndex(state, "red_artillery_pressure") == nil, "retired decorative Wingstalker pressure should not remain")
+    assertEquals(scenario.turnLimitRounds, 4, "P003 should be a four-turn capture discipline puzzle")
+    assertEquals(scenario.promotion.source, "manual_playtest_capture_discipline_4", "P003 should record the capture discipline playtest source")
+    assertTrue(finisher and finisher.name == "Crusher" and finisher.row == 8 and finisher.col == 4 and finisher.currentHp == 4, "P003 should use a D8 Crusher as the finisher")
+    assertTrue(opener and opener.name == "Cloudstriker" and opener.row == 7 and opener.col == 7, "P003 should include G7 Cloudstriker as the ranged opener")
+    assertTrue(screen and screen.name == "Earthstalker" and screen.row == 5 and screen.col == 6, "P003 should include the F5 screen/false breaker")
+    assertTrue(commandant and commandant.row == 2 and commandant.col == 4 and commandant.currentHp == 4, "P003 Commandant should die to one Crusher hit")
+    assertTrue(gate and gate.name == "Rock" and gate.row == 4 and gate.col == 4 and gate.currentHp == 2, "P003 should include the D4 capture-discipline gate")
+    assertTrue(guard and guard.name == "Rock" and guard.row == 3 and guard.col == 4 and guard.currentHp == 3, "P003 should include the D3 capture guard")
+    assertTrue(battery and battery.name == "Artillery" and battery.row == 6 and battery.col == 1, "P003 should include active Red Artillery pressure")
+    assertTrue(lure and lure.name == "Wingstalker" and lure.row == 5 and lure.col == 7 and lure.currentHp == 2, "P003 should include the G5 Wingstalker tempo lure")
+    assertTrue(findAction(state, "move", "blue_finisher", 6, 4) ~= nil, "Crusher should be able to start the D-file march")
+    assertTrue(findAction(state, "move", "blue_opener", 4, 7) ~= nil, "Cloudstriker should be able to stage on G4")
+    assertTrue(findAction(state, "attack", "blue_opener", 5, 7) ~= nil, "Cloudstriker should see the tempting immediate Wingstalker shot")
+    assertTrue(findAction(state, "attack", "blue_opener", 4, 4) == nil, "Cloudstriker must not open the gate without staging")
+    assertTrue(findAction(state, "attack", "blue_finisher", 2, 4) == nil, "Crusher must not start with a Commandant hit")
 end)
 
-runTest("p003_false_first_turn_looks_productive_but_loses_the_breaker", function()
+runTest("p003_runtime_red_ai_presses_wounded_crusher", function()
     local scenario = loadScenario("scenarios/P003.lua")
     local state = scenarioToState(scenario)
 
-    assertTrue(findAction(state, "attack", "blue_finisher", 2, 5) == nil, "Crusher must not start with a Commandant hit")
-    assertTrue(findAction(state, "attack", "blue_breaker", 3, 5) == nil, "Earthstalker must not clear the blocker without setup")
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = stateEngine.normalize((rulesKernel.applyAction(state, { type = "end_turn" })))
 
-    local falseLine = doAction(state, "move", "blue_finisher", 5, 5) -- E7 -> E5
-    falseLine = doAction(falseLine, "move", "blue_decoy", 5, 6) -- G5 -> F5-looking pressure lane
-    falseLine = endBlueTurnThroughScenarioRedPolicy(falseLine, scenario)
-    assertTrue(findUnitIndex(falseLine, "blue_breaker") == nil, "false heavy advance should let Red remove the required breaker")
-
-    local blockerIndex, blocker = findUnitIndex(falseLine, "red_contact_blocker")
-    assertTrue(blockerIndex ~= nil and blocker.currentHp > 0, "false heavy advance should leave the contact blocker intact")
+    local command, record = runtimeCommandFromState(state, scenario)
+    assertTrue(record and record.ok == true, "true runtime Scenario Red AI should resolve a command")
+    assertEquals(command.actionType, "attack", "runtime AI should pressure the wounded Crusher immediately")
+    assertEquals(command.fromRow, 6, "runtime AI should use the A6 battery")
+    assertEquals(command.fromCol, 1, "runtime AI should use the A6 battery")
+    assertEquals(command.toRow, 6, "runtime AI should shoot the Crusher on D6")
+    assertEquals(command.toCol, 4, "runtime AI should shoot the Crusher on D6")
 end)
 
-runTest("p003_turn_limit_is_binding_on_fastest_known_setup_line", function()
+runTest("p003_false_cloudstriker_opens_gate_too_early_but_delays_crusher", function()
     local scenario = loadScenario("scenarios/P003.lua")
     local state = scenarioToState(scenario)
 
-    state = doAction(state, "move", "blue_breaker", 3, 4) -- D5 -> D3
-    state = doAction(state, "attack", "blue_breaker", 3, 5) -- D3 x E3
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = doAction(state, "attack", "blue_opener", 4, 4)
     state = passRedTurn(state)
-
-    state = doAction(state, "move", "blue_breaker", 3, 3) -- E3 -> C3
-    state = doAction(state, "move", "blue_finisher", 5, 5) -- E7 -> E5
-    assertTrue(findAction(state, "attack", "blue_finisher", 2, 5) == nil, "P003 Crusher should still be one tempo short after two Blue turns")
-    assertEquals(outcome(state), "ongoing", "P003 fastest known setup should not win before Blue turn three")
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = passRedTurn(state)
+    state = doAction(state, "move", "blue_finisher", 4, 4)
+    state = passRedTurn(state)
+    assertTrue(findAction(state, "attack", "blue_finisher", 2, 4) == nil, "early gate payoff should leave Crusher one capture short on Blue turn four")
 end)
 
-runTest("p003_intended_three_turn_runtime_line_wins_with_scenario_red_policy", function()
+runTest("p003_false_take_red_lure_loses_gate_timing", function()
     local scenario = loadScenario("scenarios/P003.lua")
     local state = scenarioToState(scenario)
 
-    state = doAction(state, "move", "blue_breaker", 3, 4) -- D5 -> D3
-    state = doAction(state, "attack", "blue_breaker", 3, 5) -- D3 x E3
-    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    state = doAction(state, "attack", "blue_opener", 5, 7)
+    assertTrue(findUnitIndex(state, "red_lure") == nil, "the Wingstalker lure should be a real removable target")
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = passRedTurn(state)
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = doAction(state, "attack", "blue_opener", 4, 4)
+    state = passRedTurn(state)
+    state = doAction(state, "move", "blue_finisher", 4, 4)
+    state = passRedTurn(state)
+    state = doAction(state, "attack", "blue_finisher", 3, 4)
+    assertTrue(findAction(state, "attack", "blue_finisher", 2, 4) == nil, "taking the obvious Red lure should leave Crusher one action short on Blue turn four")
+    assertEquals(commandantHp(state), 4, "the lure line should not sneak early Commandant damage")
+end)
 
-    assertTrue(findUnitIndex(state, "red_contact_blocker") == nil, "contact blocker should be gone before Crusher stages")
-    assertTrue(findUnitIndex(state, "blue_breaker") ~= nil, "correct first turn should preserve the breaker from Red pressure")
-    state = doAction(state, "move", "blue_breaker", 3, 3) -- E3 -> C3, lures hunter off the E-file
-    state = doAction(state, "move", "blue_finisher", 5, 5) -- E7 -> E5
-    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+runTest("p003_false_melee_gate_clear_blocks_the_exact_cell", function()
+    local scenario = loadScenario("scenarios/P003.lua")
+    local state = scenarioToState(scenario)
 
-    assertTrue(findUnitIndex(state, "blue_breaker") == nil, "breaker should be spent as the lure before the final breach")
-    local _, hunter = findUnitIndex(state, "red_breaker_hunter")
-    assertTrue(hunter ~= nil and hunter.row == 3 and hunter.col == 3, "hunter should be pulled away from the final Crusher lane")
-    state = doAction(state, "move", "blue_finisher", 3, 5) -- E5 -> E3
-    assertEquals(commandantHp(state), 4, "Crusher move should not damage Commandant")
-    state = doAction(state, "attack", "blue_finisher", 2, 5) -- E3 x E2
-    assertEquals(outcome(state), "blue_win", "P003 intended three-turn line should destroy Commandant")
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = doAction(state, "move", "blue_screen", 5, 4)
+    state = passRedTurn(state)
+    state = doAction(state, "attack", "blue_screen", 4, 4)
+
+    local _, screen = findUnitIndex(state, "blue_screen")
+    assertTrue(screen ~= nil and screen.row == 4 and screen.col == 4, "melee gate clear should capture and occupy D4")
+    assertTrue(findAction(state, "move", "blue_finisher", 4, 4) == nil, "Crusher cannot move into D4 after the wrong melee capture")
+end)
+
+runTest("p003_false_skip_ranged_open_keeps_gate_closed", function()
+    local scenario = loadScenario("scenarios/P003.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    assertTrue(findAction(state, "move", "blue_finisher", 4, 4) == nil, "Crusher cannot pass through the still-occupied D4 gate")
+end)
+
+runTest("p003_cannot_finish_before_blue_turn_four", function()
+    local scenario = loadScenario("scenarios/P003.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_opener", 4, 4)
+    state = doAction(state, "move", "blue_finisher", 4, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_finisher", 3, 4)
+    assertEquals(commandantHp(state), 4, "movement setup should not damage the Commandant before the final turn")
+    assertEquals(outcome(state), "ongoing", "P003 should not finish before Blue turn four")
+end)
+
+runTest("p003_intended_four_turn_capture_discipline_wins", function()
+    local scenario = loadScenario("scenarios/P003.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 6, 4)
+    state = doAction(state, "move", "blue_opener", 4, 7)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    local _, finisher = findUnitIndex(state, "blue_finisher")
+    assertTrue(finisher ~= nil and finisher.currentHp == 3, "Red battery should wound the Crusher on the first handoff")
+
+    state = doAction(state, "attack", "blue_opener", 4, 4)
+    state = doAction(state, "move", "blue_finisher", 4, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    assertTrue(findUnitIndex(state, "neutral_gate") == nil, "Cloudstriker should open D4 without occupying it")
+    _, finisher = findUnitIndex(state, "blue_finisher")
+    assertTrue(finisher ~= nil and finisher.row == 4 and finisher.col == 4, "Crusher should claim the opened D4 cell")
+
+    state = doAction(state, "attack", "blue_finisher", 3, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    _, finisher = findUnitIndex(state, "blue_finisher")
+    assertTrue(finisher ~= nil and finisher.row == 3 and finisher.col == 4 and finisher.currentHp == 1, "Crusher should survive on D3 after Commandant Defense")
+
+    state = doAction(state, "attack", "blue_finisher", 2, 4)
+    assertEquals(outcome(state), "blue_win", "P003 intended capture-discipline line should destroy Commandant")
 end)
 
 runTest("p004_is_distinct_material_and_has_a_productive_false_opening", function()
@@ -422,73 +541,143 @@ runTest("p004_intended_three_turn_dual_setup_lane_wins", function()
     assertEquals(outcome(state), "blue_win", "P004 intended three-turn line should destroy Commandant")
 end)
 
-runTest("p005_material_has_artillery_extraction_under_real_hunter_pressure", function()
+runTest("p005_material_has_crossed_march_with_mixed_axes", function()
     local scenario = loadScenario("scenarios/P005.lua")
     local state = scenarioToState(scenario)
     local _, finisher = findUnitIndex(state, "blue_finisher")
-    local _, interceptor = findUnitIndex(state, "blue_interceptor")
-    local _, decoy = findUnitIndex(state, "blue_decoy")
-    local _, hunter = findUnitIndex(state, "red_hunter")
+    local _, opener = findUnitIndex(state, "blue_opener")
+    local _, cover = findUnitIndex(state, "blue_cover")
+    local _, commandant = findUnitIndex(state, "red_commandant")
+    local _, gate = findUnitIndex(state, "red_gate")
+    local _, battery = findUnitIndex(state, "red_battery")
+    local _, chaser = findUnitIndex(state, "red_chaser")
+    local _, d8Lock = findUnitIndex(state, "neutral_d8_lock")
+    local _, d4Screen = findUnitIndex(state, "neutral_d4_screen")
 
     assertEquals(scenario.id, "P005", "P005 id mismatch")
     assertEquals(scenario.name, "Scenario P005", "P005 public name should stay numeric")
-    assertEquals(scenario.turnLimitRounds, 3, "P005 should use a tight three-turn extraction")
-    assertEquals(scenario.promotion.source, "manual_playtest_artillery_extraction", "P005 source mismatch")
-    assertTrue(finisher and finisher.name == "Artillery" and finisher.currentHp == 4, "P005 should use damaged Artillery as finisher")
-    assertTrue(interceptor and interceptor.name == "Earthstalker", "P005 should include the Earthstalker interceptor")
-    assertTrue(decoy and decoy.name == "Bastion" and decoy.currentHp == 3, "P005 should include the wounded Bastion decoy")
-    assertTrue(hunter and hunter.name == "Earthstalker", "P005 must include active Red hunter pressure")
-    assertTrue(findAction(state, "attack", "blue_finisher", 2, 6) == nil, "Artillery must not start with a Commandant hit")
-    assertTrue(findAction(state, "move", "blue_decoy", 6, 5) ~= nil, "Bastion lure cell should be reachable")
-    assertTrue(findAction(state, "attack", "blue_interceptor", 6, 4) == nil, "interceptor must not be able to remove the hunter immediately")
+    assertEquals(scenario.turnLimitRounds, 4, "P005 should use a four-turn crossed Crusher march")
+    assertEquals(scenario.promotion.source, "manual_playtest_crossed_march_4", "P005 source mismatch")
+    assertTrue(finisher and finisher.name == "Crusher" and finisher.row == 8 and finisher.col == 8 and finisher.currentHp == 2, "P005 should use a wounded H8 Crusher as the moving finisher")
+    assertTrue(opener and opener.name == "Cloudstriker" and opener.row == 3 and opener.col == 6 and opener.currentHp == 2, "P005 should include wounded F3 Cloudstriker vertical opener")
+    assertTrue(cover and cover.name == "Artillery" and cover.row == 8 and cover.col == 2, "P005 should include B8 Artillery for the E8 softening shot")
+    assertTrue(commandant and commandant.row == 4 and commandant.col == 5 and commandant.currentHp == 4, "P005 Commandant should die to one Crusher hit from E5")
+    assertTrue(gate and gate.name == "Earthstalker" and gate.row == 6 and gate.col == 6 and gate.currentHp == 2, "P005 should include the F6 active route gate")
+    assertTrue(battery and battery.name == "Artillery" and battery.row == 8 and battery.col == 5 and battery.currentHp == 2 and battery.startingHp == 4, "P005 should include live E8 Red Artillery as the mandatory capture target")
+    assertTrue(chaser and chaser.name == "Wingstalker" and chaser.row == 2 and chaser.col == 8 and chaser.currentHp == 3, "P005 should include the durable H2 Wingstalker crossing pressure")
+    assertTrue(d8Lock and d8Lock.name == "Rock" and d8Lock.row == 8 and d8Lock.col == 4 and d8Lock.currentHp == 2 and d8Lock.startingHp == 2, "P005 should include the D8 lock that preserves the E8 capture route")
+    assertTrue(d4Screen and d4Screen.name == "Rock" and d4Screen.row == 4 and d4Screen.col == 4, "P005 should include the D4 screen against the logged Cloudstriker shot")
+    assertTrue(findAction(state, "attack", "blue_opener", 6, 6) ~= nil, "Cloudstriker should be able to open F6")
+    assertTrue(findAction(state, "attack", "blue_cover", 8, 5) ~= nil, "Artillery should be able to soften the E8 battery")
+    assertTrue(findAction(state, "move", "blue_finisher", 8, 6) ~= nil, "Crusher should be able to start the first horizontal leg")
+    assertTrue(findAction(state, "move", "blue_finisher", 6, 6) == nil, "Crusher cannot skip the first bend on turn one")
 end)
 
-runTest("p005_false_advance_without_decoy_loses_the_finisher", function()
+runTest("p005_false_logged_cloudstriker_c4_shot_is_screened", function()
     local scenario = loadScenario("scenarios/P005.lua")
     local state = scenarioToState(scenario)
 
-    local falseLine = doAction(state, "move", "blue_finisher", 7, 6) -- F8 -> F7
-    falseLine = doAction(falseLine, "move", "blue_interceptor", 8, 5) -- E7 -> E8, no lure offered
-    falseLine = endBlueTurnThroughScenarioRedPolicy(falseLine, scenario)
+    state = doAction(state, "move", "blue_opener", 3, 3)
+    state = doAction(state, "move", "blue_finisher", 6, 8)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    assertTrue(findUnitIndex(state, "blue_finisher") == nil, "logged bait line should still lose Crusher to the F6 Earthstalker")
 
-    assertTrue(findUnitIndex(falseLine, "blue_finisher") == nil, "without the decoy, Red should kill the Artillery finisher")
-    assertEquals(outcome(falseLine), "ongoing", "false line should fail by losing the finisher, not by early win/loss")
+    state = doAction(state, "move", "blue_opener", 4, 3)
+    assertTrue(findAction(state, "attack", "blue_opener", 4, 5) == nil, "D4 screen should block the logged Cloudstriker C4 shot on Commandant")
+    assertEquals(commandantHp(state), 4, "logged Cloudstriker line should not damage Commandant")
 end)
 
-runTest("p005_turn_limit_is_binding_on_fastest_known_setup_line", function()
+runTest("p005_false_same_units_wrong_order_loses_tempo", function()
     local scenario = loadScenario("scenarios/P005.lua")
     local state = scenarioToState(scenario)
 
-    state = doAction(state, "move", "blue_decoy", 6, 5) -- G6 -> E6
-    state = doAction(state, "move", "blue_finisher", 7, 6) -- F8 -> F7
+    state = doAction(state, "attack", "blue_opener", 6, 6)
+    state = doAction(state, "attack", "blue_cover", 8, 5)
     state = passRedTurn(state)
-
-    state = doAction(state, "move", "blue_finisher", 6, 6) -- F7 -> F6
-    assertTrue(findAction(state, "attack", "blue_finisher", 2, 6) == nil, "P005 Artillery should still be one tempo short after two Blue turns")
-    assertEquals(outcome(state), "ongoing", "P005 fastest known setup should not win before Blue turn three")
+    state = doAction(state, "move", "blue_finisher", 8, 6)
+    state = passRedTurn(state)
+    state = doAction(state, "attack", "blue_finisher", 8, 5)
+    state = passRedTurn(state)
+    state = doAction(state, "move", "blue_finisher", 6, 5)
+    assertTrue(findAction(state, "attack", "blue_finisher", 4, 5) == nil, "same useful actions in the wrong order should leave Crusher one action short on Blue turn four")
 end)
 
-runTest("p005_intended_three_turn_artillery_extraction_wins", function()
+runTest("p005_false_cloudstriker_chases_wingstalker_loses_commandant_race", function()
     local scenario = loadScenario("scenarios/P005.lua")
     local state = scenarioToState(scenario)
 
-    state = doAction(state, "move", "blue_decoy", 6, 5) -- G6 -> E6
-    state = doAction(state, "move", "blue_finisher", 7, 6) -- F8 -> F7
-    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
-    assertTrue(findUnitIndex(state, "blue_decoy") == nil, "Red should take the wounded Bastion decoy")
-    local _, hunter = findUnitIndex(state, "red_hunter")
-    assertTrue(hunter ~= nil and hunter.row == 6 and hunter.col == 5, "hunter should capture onto the decoy cell")
-    assertTrue(findUnitIndex(state, "blue_finisher") ~= nil, "decoy line should preserve Artillery")
+    state = doAction(state, "move", "blue_opener", 2, 6)
+    state = doAction(state, "attack", "blue_opener", 2, 8)
+    local _, chaser = findUnitIndex(state, "red_chaser")
+    assertTrue(chaser ~= nil and chaser.currentHp == 1, "Wingstalker should survive the tempting Cloudstriker chase")
 
-    state = doAction(state, "attack", "blue_interceptor", 6, 5) -- E7 x E6
-    state = doAction(state, "move", "blue_finisher", 6, 6) -- F7 -> F6
-    assertTrue(findUnitIndex(state, "red_hunter") == nil, "interceptor should remove the hunter before Artillery fires")
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    _, chaser = findUnitIndex(state, "red_chaser")
+    assertTrue(chaser ~= nil and chaser.row == 2 and chaser.col == 6, "Red should recapture onto F2 after the shortcut attempt")
+    assertTrue(findUnitIndex(state, "blue_opener") == nil, "the wounded Cloudstriker chase should lose the opener")
+    assertEquals(commandantHp(state), 4, "the Wingstalker chase should not make Commandant progress")
+end)
+
+runTest("p005_false_skip_artillery_capture_leaves_e_file_disrupted", function()
+    local scenario = loadScenario("scenarios/P005.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "attack", "blue_opener", 6, 6)
+    state = doAction(state, "move", "blue_finisher", 8, 6)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 6)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 5)
     state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
 
-    assertEquals(commandantHp(state), 2, "setup should not damage Commandant before final shot")
-    state = doAction(state, "move", "blue_finisher", 5, 6) -- F6 -> F5
-    state = doAction(state, "attack", "blue_finisher", 2, 6) -- F5 x F2
-    assertEquals(outcome(state), "blue_win", "P005 intended Artillery extraction should destroy Commandant")
+    local _, battery = findUnitIndex(state, "red_battery")
+    assertTrue(battery ~= nil and battery.row == 8 and battery.col == 5, "skipping the Artillery capture should leave the E8 battery alive")
+    assertTrue(findAction(state, "move", "blue_finisher", 5, 5) == nil, "Red pressure should deny the E5 finishing square after the skipped E8 capture")
+    assertEquals(commandantHp(state), 4, "the skipped E8 capture should make no Commandant progress")
+end)
+
+runTest("p005_cannot_finish_before_blue_turn_four", function()
+    local scenario = loadScenario("scenarios/P005.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "attack", "blue_opener", 6, 6)
+    state = doAction(state, "move", "blue_finisher", 8, 6)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    state = doAction(state, "attack", "blue_cover", 8, 5)
+    state = doAction(state, "attack", "blue_finisher", 8, 5)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 5)
+    assertEquals(commandantHp(state), 4, "crossed march should not damage Commandant before final turn")
+    assertEquals(outcome(state), "ongoing", "P005 should require Blue turn four")
+end)
+
+runTest("p005_intended_four_turn_crossed_march_wins", function()
+    local scenario = loadScenario("scenarios/P005.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "attack", "blue_opener", 6, 6)
+    state = doAction(state, "move", "blue_finisher", 8, 6)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    assertTrue(findUnitIndex(state, "red_gate") == nil, "Cloudstriker should open F6 without occupying it")
+    local _, opener = findUnitIndex(state, "blue_opener")
+    assertTrue(opener == nil, "Wingstalker should remove the wounded Cloudstriker after it opens the route")
+
+    state = doAction(state, "attack", "blue_cover", 8, 5)
+    local _, battery = findUnitIndex(state, "red_battery")
+    assertTrue(battery ~= nil and battery.currentHp == 1, "Artillery shot should soften E8 battery for the Crusher capture")
+    state = doAction(state, "attack", "blue_finisher", 8, 5)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    battery = select(2, findUnitIndex(state, "red_battery"))
+    assertTrue(battery == nil, "Crusher should capture and remove the E8 battery")
+
+    state = doAction(state, "move", "blue_finisher", 6, 5)
+    state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
+    local _, finisher = findUnitIndex(state, "blue_finisher")
+    assertTrue(finisher ~= nil and finisher.row == 6 and finisher.col == 5 and finisher.currentHp == 1, "Crusher should survive Red pressure on E6 after the E8 capture")
+
+    state = doAction(state, "move", "blue_finisher", 5, 5)
+    state = doAction(state, "attack", "blue_finisher", 4, 5)
+    assertEquals(outcome(state), "blue_win", "P005 intended crossed march should destroy Commandant")
 end)
 
 runTest("p006_material_has_bastion_siege_walk_and_decoy_timing", function()
@@ -730,7 +919,7 @@ runTest("p008_material_has_crossfire_relay", function()
     assertTrue(artillery and artillery.name == "Artillery" and artillery.row == 2 and artillery.col == 5 and artillery.currentHp == 1, "P008 should use a doomed 1 HP Artillery opener")
     assertTrue(cloud and cloud.name == "Cloudstriker" and cloud.row == 5 and cloud.col == 5 and cloud.currentHp == 3, "P008 should use a Cloudstriker relay hit")
     assertTrue(stalker and stalker.name == "Earthstalker" and stalker.row == 4 and stalker.col == 4, "P008 should use an Earthstalker hunter answer")
-    assertTrue(wing and wing.name == "Wingstalker" and wing.row == 6 and wing.col == 6, "P008 should use delayed Wingstalker anti-air")
+    assertTrue(wing and wing.name == "Wingstalker" and wing.row == 6 and wing.col == 6, "P008 should include the tempting Wingstalker anti-air line")
     assertTrue(commandant and commandant.row == 2 and commandant.col == 2 and commandant.currentHp == 9, "P008 Commandant should require the 2+3+4 relay")
     assertTrue(redCloud and redCloud.name == "Cloudstriker" and redCloud.row == 4 and redCloud.col == 5 and redCloud.currentHp == 2, "P008 should include the Red flyer temptation")
     assertTrue(hunter and hunter.name == "Crusher" and hunter.row == 5 and hunter.col == 4 and hunter.currentHp == 4, "P008 should include a real Red hunter")
@@ -780,12 +969,12 @@ runTest("p008_intended_four_turn_crossfire_relay_wins", function()
     assertTrue(findUnitIndex(state, "blue_artillery") == nil, "Red should remove Artillery after it fires")
     assertTrue(findUnitIndex(state, "red_hunter") == nil, "Earthstalker should remove the Red hunter on turn one")
     local _, redCloud = findUnitIndex(state, "red_cloud")
-    assertTrue(redCloud ~= nil and redCloud.row == 6 and redCloud.col == 5, "Red flyer should drift into Wingstalker range")
+    assertTrue(redCloud ~= nil and redCloud.row == 2 and redCloud.col == 5, "Red flyer should take the Cloudstriker firing lane")
 
-    state = doAction(state, "attack", "blue_wing", 6, 5)
+    state = doAction(state, "attack", "blue_cloud", 2, 5)
     state = doAction(state, "move", "blue_crusher", 4, 3)
     state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
-    assertTrue(findUnitIndex(state, "red_cloud") == nil, "Wingstalker should remove the Red flyer on turn two")
+    assertTrue(findUnitIndex(state, "red_cloud") == nil, "Cloudstriker should remove the Red flyer on turn two")
     local _, crusher = findUnitIndex(state, "blue_crusher")
     assertTrue(crusher ~= nil and crusher.row == 4 and crusher.col == 3, "Crusher should reach the staging square")
 
@@ -794,7 +983,7 @@ runTest("p008_intended_four_turn_crossfire_relay_wins", function()
     state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
     assertEquals(commandantHp(state), 4, "Cloudstriker should supply the middle 3 damage")
     local _, cloud = findUnitIndex(state, "blue_cloud")
-    assertTrue(cloud ~= nil and cloud.row == 2 and cloud.col == 5, "Cloudstriker should survive after its relay shot")
+    assertTrue(cloud ~= nil and cloud.row == 2 and cloud.col == 5 and cloud.currentHp == 2, "Cloudstriker should survive Red battery damage after its relay shot")
 
     state = doAction(state, "move", "blue_crusher", 2, 3)
     state = doAction(state, "attack", "blue_crusher", 2, 2)
@@ -991,6 +1180,7 @@ runTest("p010_material_has_gate_march", function()
     local _, commandant = findUnitIndex(state, "red_commandant")
     local _, gate = findUnitIndex(state, "neutral_gate")
     local _, lineScreen = findUnitIndex(state, "neutral_screen")
+    local _, sniperScreen = findUnitIndex(state, "neutral_sniper_screen")
     local _, hunter = findUnitIndex(state, "red_hunter")
     local _, sniper = findUnitIndex(state, "red_sniper")
 
@@ -1005,6 +1195,7 @@ runTest("p010_material_has_gate_march", function()
     assertTrue(commandant and commandant.row == 1 and commandant.col == 2 and commandant.currentHp == 3, "P010 Commandant should need Cloudstriker damage")
     assertTrue(gate and gate.name == "Rock" and gate.row == 1 and gate.col == 4 and gate.currentHp == 2, "P010 should include the D1 gate")
     assertTrue(lineScreen and lineScreen.name == "Rock" and lineScreen.row == 3 and lineScreen.col == 5 and lineScreen.currentHp == 5, "P010 should include the E3 line screen")
+    assertTrue(sniperScreen and sniperScreen.name == "Rock" and sniperScreen.row == 1 and sniperScreen.col == 6 and sniperScreen.currentHp == 5, "P010 should include the F1 sniper screen")
     assertTrue(hunter and hunter.name == "Crusher" and hunter.row == 7 and hunter.col == 5, "P010 should include the melee hunter")
     assertTrue(sniper and sniper.name == "Cloudstriker" and sniper.row == 4 and sniper.col == 5 and sniper.currentHp == 3, "P010 should include the wounded line sniper")
     assertTrue(findAction(state, "move", "blue_breaker", 7, 4) ~= nil, "Artillery should start its D-file march")
@@ -1069,7 +1260,7 @@ runTest("p010_intended_five_turn_gate_march_wins", function()
     local _, hunter = findUnitIndex(state, "red_hunter")
     assertTrue(hunter ~= nil and hunter.row == 8 and hunter.col == 5, "Crusher should take the first screen")
     local _, sniper = findUnitIndex(state, "red_sniper")
-    assertTrue(sniper ~= nil and sniper.row == 7 and sniper.col == 5, "sniper should chase the lower lane")
+    assertTrue(sniper ~= nil and sniper.row == 4 and sniper.col == 6, "sniper should take the Bastion firing lane")
 
     state = doAction(state, "move", "blue_breaker", 6, 4)
     state = doAction(state, "move", "blue_decoy", 8, 6)
@@ -1077,6 +1268,8 @@ runTest("p010_intended_five_turn_gate_march_wins", function()
     assertTrue(findUnitIndex(state, "blue_decoy") == nil, "Bastion should be the second screen")
     _, hunter = findUnitIndex(state, "red_hunter")
     assertTrue(hunter ~= nil and hunter.row == 8 and hunter.col == 6, "Crusher should be pulled to F8")
+    _, sniper = findUnitIndex(state, "red_sniper")
+    assertTrue(sniper ~= nil and sniper.row == 4 and sniper.col == 8, "sniper should keep chasing a firing lane")
 
     state = doAction(state, "move", "blue_breaker", 5, 4)
     state = doAction(state, "move", "blue_finisher", 1, 5)
@@ -1084,17 +1277,219 @@ runTest("p010_intended_five_turn_gate_march_wins", function()
     local _, finisher = findUnitIndex(state, "blue_finisher")
     assertTrue(finisher ~= nil and finisher.row == 1 and finisher.col == 5, "Cloudstriker should wait on the firing square")
     _, sniper = findUnitIndex(state, "red_sniper")
-    assertTrue(sniper ~= nil and sniper.row == 2 and sniper.col == 5, "E3 Rock should keep the sniper from shooting the finisher")
+    assertTrue(sniper ~= nil and sniper.row == 1 and sniper.col == 8, "F1 Rock should keep the sniper from shooting the finisher")
 
     state = doAction(state, "move", "blue_breaker", 4, 4)
     state = doAction(state, "attack", "blue_breaker", 1, 4)
     assertTrue(findUnitIndex(state, "neutral_gate") == nil, "Artillery should destroy the D1 gate")
     state = endBlueTurnThroughScenarioRedPolicy(state, scenario)
     local _, breaker = findUnitIndex(state, "blue_breaker")
-    assertTrue(breaker ~= nil and breaker.currentHp == 3, "red sniper may punish the breaker, but too late")
+    assertTrue(breaker ~= nil and breaker.currentHp == 5, "sniper screen should keep the breaker untouched")
+    local _, sniperScreen = findUnitIndex(state, "neutral_sniper_screen")
+    assertTrue(sniperScreen ~= nil and sniperScreen.currentHp == 2, "red sniper should spend its shot into the screen")
 
     state = doAction(state, "attack", "blue_finisher", 1, 2)
     assertEquals(outcome(state), "blue_win", "P010 intended gate march should destroy Commandant")
+end)
+
+runTest("p011_material_has_jagged_crusher_breach", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+    local _, finisher = findUnitIndex(state, "blue_finisher")
+    local _, artillery = findUnitIndex(state, "blue_artillery")
+    local _, cloud = findUnitIndex(state, "blue_cloud")
+    local _, commandant = findUnitIndex(state, "red_commandant")
+    local _, step1 = findUnitIndex(state, "neutral_step1")
+    local _, step2 = findUnitIndex(state, "neutral_step2")
+    local _, midLock = findUnitIndex(state, "neutral_mid_lock")
+    local _, finalLock = findUnitIndex(state, "neutral_final_lock")
+    local _, h2Anchor = findUnitIndex(state, "neutral_h2_anchor")
+    local _, e3Anchor = findUnitIndex(state, "neutral_e3_anchor")
+    local _, battery = findUnitIndex(state, "red_battery")
+
+    assertEquals(scenario.id, "P011", "P011 id mismatch")
+    assertEquals(scenario.name, "Scenario P011", "P011 public name should stay numeric")
+    assertEquals(scenario.turnLimitRounds, 6, "P011 should be a six-turn jagged breach")
+    assertEquals(scenario.promotion.source, "manual_playtest_jagged_crusher_breach_6", "P011 source mismatch")
+    assertTrue(finisher and finisher.name == "Crusher" and finisher.row == 8 and finisher.col == 2, "P011 should use B8 Crusher as the only finisher")
+    assertTrue(artillery and artillery.name == "Artillery" and artillery.row == 4 and artillery.col == 1, "P011 should use A4 Artillery for the D4 soften")
+    assertTrue(cloud and cloud.name == "Cloudstriker" and cloud.row == 4 and cloud.col == 8, "P011 should use H4 Cloudstriker under Red battery pressure")
+    assertTrue(commandant and commandant.name == "Commandant" and commandant.row == 2 and commandant.col == 5 and commandant.currentHp == 4, "P011 Commandant should require Crusher damage")
+    assertTrue(step1 and step1.name == "Rock" and step1.row == 6 and step1.col == 2 and step1.currentHp == 3, "P011 should include the first B6 capture step")
+    assertTrue(step2 and step2.name == "Rock" and step2.row == 6 and step2.col == 4 and step2.currentHp == 3, "P011 should include the second D6 capture step")
+    assertTrue(midLock and midLock.name == "Rock" and midLock.row == 4 and midLock.col == 4 and midLock.currentHp == 5, "P011 should include the D4 Artillery+Crusher lock")
+    assertTrue(finalLock and finalLock.name == "Rock" and finalLock.row == 4 and finalLock.col == 6 and finalLock.currentHp == 5, "P011 should include the F4 Cloudstriker+Crusher lock")
+    assertTrue(h2Anchor and h2Anchor.name == "Rock" and h2Anchor.row == 2 and h2Anchor.col == 8, "P011 should block the easy H2 Cloudstriker shot")
+    assertTrue(e3Anchor and e3Anchor.name == "Rock" and e3Anchor.row == 3 and e3Anchor.col == 5, "P011 should block the E-file Cloudstriker shot")
+    assertTrue(battery and battery.name == "Artillery" and battery.row == 6 and battery.col == 8, "P011 should include active Red Artillery pressure")
+    assertTrue(findUnitIndex(state, "red_f4_anchor") == nil, "P011 must not retain the old F4 Healer anchor")
+    assertTrue(findUnitIndex(state, "red_final_lock") == nil, "P011 must not contain a Healer final lock")
+    assertTrue(findAction(state, "move", "blue_finisher", 7, 2) ~= nil, "Crusher should be able to start the jagged route")
+    assertTrue(findAction(state, "attack", "blue_artillery", 4, 4) ~= nil, "Artillery should be able to soften D4")
+    assertTrue(findAction(state, "attack", "blue_cloud", 4, 6) ~= nil, "Cloudstriker should be able to soften F4")
+    assertTrue(findAction(state, "attack", "blue_cloud", 2, 5) == nil, "Cloudstriker should not start with a Commandant shot")
+    assertTrue(findAction(state, "attack", "blue_artillery", 2, 5) == nil, "Artillery should not start with a Commandant shot")
+    for _, unit in ipairs(state.units or {}) do
+        assertTrue(unit.name ~= "Healer", "P011 must not include Healer at all")
+    end
+end)
+
+runTest("p011_has_no_one_turn_clear", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    local function actionLabel(action)
+        local cell = action.targetCell or action.to or {}
+        return table.concat({
+            tostring(action.type),
+            tostring(action.actorId),
+            tostring(cell.row),
+            tostring(cell.col)
+        }, " ")
+    end
+
+    for _, first in ipairs(stateEngine.getLegalActions(state)) do
+        if first.type ~= "end_turn" then
+            local afterFirst = applyRuntimeAction(state, first)
+            assertEquals(outcome(afterFirst), "ongoing", "P011 should not clear in one action: " .. actionLabel(first))
+            if afterFirst.currentPlayer == BLUE and (tonumber(afterFirst.turnActions) or 0) < (tonumber(afterFirst.maxActionsPerTurn) or 2) then
+                for _, second in ipairs(stateEngine.getLegalActions(afterFirst)) do
+                    if second.type ~= "end_turn" then
+                        local afterSecond = applyRuntimeAction(afterFirst, second)
+                        assertEquals(outcome(afterSecond), "ongoing", "P011 should not clear on Blue turn one: " .. actionLabel(first) .. " / " .. actionLabel(second))
+                    end
+                end
+            end
+        end
+    end
+end)
+
+runTest("p011_false_skip_artillery_soften_blocks_mid_capture", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 7, 2)
+    state = doAction(state, "attack", "blue_finisher", 6, 2)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 3)
+    state = doAction(state, "attack", "blue_finisher", 6, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 5, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+
+    state = doAction(state, "attack", "blue_finisher", 4, 4)
+    local _, midLock = findUnitIndex(state, "neutral_mid_lock")
+    assertTrue(midLock ~= nil and midLock.currentHp == 2, "without Artillery, Crusher should damage but not capture D4")
+    assertTrue(findAction(state, "move", "blue_finisher", 4, 5) == nil, "Crusher should remain off the E4 approach after the failed mid capture")
+end)
+
+runTest("p011_false_delay_cloud_loses_final_lock_timer", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 7, 2)
+    state = doAction(state, "attack", "blue_finisher", 6, 2)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 3)
+    state = doAction(state, "attack", "blue_finisher", 6, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_artillery", 4, 4)
+    state = doAction(state, "move", "blue_finisher", 5, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_finisher", 4, 4)
+    state = doAction(state, "move", "blue_artillery", 4, 2)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+
+    assertTrue(findUnitIndex(state, "blue_cloud") == nil, "delaying the F4 shot should let Red battery remove Cloudstriker")
+    assertTrue(findUnitIndex(state, "neutral_final_lock") ~= nil, "without Cloudstriker, F4 should remain too healthy for the route")
+end)
+
+runTest("p011_false_cloudstriker_h2_shortcut_is_blocked", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    assertTrue(findAction(state, "move", "blue_cloud", 2, 8) == nil, "H2 anchor should block the obvious Cloudstriker shortcut square")
+    local falseLine = doAction(state, "move", "blue_cloud", 1, 8)
+    assertTrue(findAction(falseLine, "attack", "blue_cloud", 2, 5) == nil, "Cloudstriker from H1 should still be unable to hit Commandant")
+    local eFile = doAction(state, "move", "blue_cloud", 4, 5)
+    assertTrue(findAction(eFile, "attack", "blue_cloud", 2, 5) == nil, "E3 anchor should block the Cloudstriker E4 shot")
+    assertEquals(commandantHp(falseLine), 4, "Cloudstriker shortcut should not damage Commandant")
+end)
+
+runTest("p011_false_cloudstriker_cannot_replace_crusher_from_f4", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "attack", "blue_cloud", 4, 6)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_cloud", 4, 6)
+    assertTrue(findUnitIndex(state, "neutral_final_lock") == nil, "two Cloudstriker shots can clear F4 but should not create a finisher")
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_cloud", 4, 6)
+
+    assertTrue(findAction(state, "attack", "blue_cloud", 2, 5) == nil, "Cloudstriker on F4 should not line up with Commandant E2")
+    assertEquals(commandantHp(state), 4, "Cloudstriker lock clearing should not damage Commandant")
+end)
+
+runTest("p011_cannot_finish_before_blue_turn_six", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 7, 2)
+    state = doAction(state, "attack", "blue_finisher", 6, 2)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 6, 3)
+    state = doAction(state, "attack", "blue_finisher", 6, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_artillery", 4, 4)
+    state = doAction(state, "move", "blue_finisher", 5, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "attack", "blue_finisher", 4, 4)
+    state = doAction(state, "attack", "blue_cloud", 4, 6)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    state = doAction(state, "move", "blue_finisher", 4, 5)
+    state = doAction(state, "attack", "blue_finisher", 4, 6)
+
+    assertEquals(commandantHp(state), 4, "P011 should not damage Commandant before the final turn")
+    assertEquals(outcome(state), "ongoing", "P011 should still be ongoing before Blue turn six")
+end)
+
+runTest("p011_intended_six_turn_jagged_crusher_breach_wins", function()
+    local scenario = loadScenario("scenarios/P011.lua")
+    local state = scenarioToState(scenario)
+
+    state = doAction(state, "move", "blue_finisher", 7, 2)
+    state = doAction(state, "attack", "blue_finisher", 6, 2)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    assertTrue(findUnitIndex(state, "neutral_step1") == nil, "Crusher should capture B6 on turn one")
+
+    state = doAction(state, "move", "blue_finisher", 6, 3)
+    state = doAction(state, "attack", "blue_finisher", 6, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    assertTrue(findUnitIndex(state, "neutral_step2") == nil, "Crusher should capture D6 on turn two")
+
+    state = doAction(state, "attack", "blue_artillery", 4, 4)
+    state = doAction(state, "move", "blue_finisher", 5, 4)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    local _, midLock = findUnitIndex(state, "neutral_mid_lock")
+    assertTrue(midLock ~= nil and midLock.currentHp == 3, "Artillery should put D4 into Crusher range")
+
+    state = doAction(state, "attack", "blue_finisher", 4, 4)
+    state = doAction(state, "attack", "blue_cloud", 4, 6)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    assertTrue(findUnitIndex(state, "neutral_mid_lock") == nil, "Crusher should capture D4 on turn four")
+    local _, finalLock = findUnitIndex(state, "neutral_final_lock")
+    assertTrue(finalLock ~= nil and finalLock.currentHp == 2, "Cloudstriker should put F4 into Crusher range")
+
+    state = doAction(state, "move", "blue_finisher", 4, 5)
+    state = doAction(state, "attack", "blue_finisher", 4, 6)
+    state = endBlueTurnThroughScenarioRedPolicyWithCommandantDefense(state, scenario)
+    local _, finisher = findUnitIndex(state, "blue_finisher")
+    assertTrue(finisher ~= nil and finisher.row == 4 and finisher.col == 6, "Crusher should capture F4 on turn five")
+
+    state = doAction(state, "move", "blue_finisher", 2, 6)
+    state = doAction(state, "attack", "blue_finisher", 2, 5)
+    assertEquals(outcome(state), "blue_win", "P011 intended jagged Crusher breach should destroy Commandant")
 end)
 
 local passed = 0

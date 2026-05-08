@@ -29,6 +29,7 @@ return {
         requiredCells = {
             { row = 1, col = 4 },
             { row = 3, col = 5 },
+            { row = 1, col = 6 },
             { row = 1, col = 5 },
             { row = 4, col = 4 },
             { row = 7, col = 6 },
@@ -106,6 +107,15 @@ return {
                 player = 0,
                 row = 3,
                 col = 5,
+                currentHp = 5,
+                startingHp = 5
+            },
+            {
+                id = "neutral_sniper_screen",
+                name = "Rock",
+                player = 0,
+                row = 1,
+                col = 6,
                 currentHp = 5,
                 startingHp = 5
             },

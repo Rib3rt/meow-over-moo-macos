@@ -3065,6 +3065,41 @@ onlineAutoAdvanceState.getScenarioReturnCta = function()
     return "Back to Scenario List"
 end
 
+onlineAutoAdvanceState.recordScenarioAttemptStart = function(source)
+    if gameMode ~= GAME.MODE.SCENARIO then
+        return nil
+    end
+
+    local scenarioState = GAME and GAME.CURRENT and GAME.CURRENT.SCENARIO or nil
+    if type(scenarioState) ~= "table" then
+        return nil
+    end
+
+    if scenarioState.attemptRecorded == true then
+        return math.max(0, math.floor(tonumber(scenarioState.attempts) or 0))
+    end
+
+    local scenarioId = tostring(scenarioState.id or "")
+    if scenarioId == "" then
+        return nil
+    end
+
+    local progressEntry, saved = scenarioProgress.recordAttempt(scenarioId)
+    if type(progressEntry) ~= "table" then
+        return nil
+    end
+
+    scenarioState.attempts = math.max(0, math.floor(tonumber(progressEntry.attempts) or 0))
+    scenarioState.solved = progressEntry.solved == true
+    scenarioState.attemptRecorded = true
+
+    if saved ~= true then
+        print("[ScenarioProgress] failed to persist attempt for " .. scenarioId .. " from " .. tostring(source or "gameplay"))
+    end
+
+    return scenarioState.attempts
+end
+
 -- SCENARIO-ONLY: restarts the same loaded scenario snapshot and increments attempts.
 onlineAutoAdvanceState.restartCurrentScenarioAttempt = function()
     if not (GAME and GAME.CURRENT) then
@@ -3079,9 +3114,11 @@ onlineAutoAdvanceState.restartCurrentScenarioAttempt = function()
         return
     end
 
-    local nextAttempts = math.max(0, tonumber(scenarioState.attempts) or 0) + 1
-    scenarioState.attempts = nextAttempts
-    scenarioState.solved = false
+    scenarioState.attemptRecorded = false
+    if not onlineAutoAdvanceState.recordScenarioAttemptStart("retry") then
+        scenarioState.attempts = math.max(0, math.floor(tonumber(scenarioState.attempts) or 0)) + 1
+        scenarioState.attemptRecorded = true
+    end
 
     GAME.CURRENT.SCENARIO_RESULT = nil
     GAME.CURRENT.SCENARIO_REQUESTED_MODE = GAME.MODE.SCENARIO
@@ -3796,6 +3833,7 @@ local function initializeComponents()
             else
                 restoredFromScenarioSnapshot = true
                 GAME.CURRENT.TURN = gameRuler.currentTurn or GAME.CURRENT.TURN
+                onlineAutoAdvanceState.recordScenarioAttemptStart("enter")
             end
         end
     end

@@ -108,7 +108,7 @@ SETTINGS = {
     -- Build-time feature switches. Do not expose these in runtime menus.
     FEATURES = {
         SCENARIO_MODE = true,
-        SCENARIO_EDITOR = false
+        SCENARIO_EDITOR = true
     },
     INPUT = {
         GAMEPAD_AXIS_THRESHOLD = 0.45,

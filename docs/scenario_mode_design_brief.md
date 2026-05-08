@@ -91,11 +91,10 @@ Reject the scenario if any of these are true:
 - It only passes because Red does nothing.
 - It needs a hidden hardcoded Red move to work.
 
-## Lessons From P001-P004
+## Lessons From Early Public Scenarios
 
 Use these as quality examples, not templates to clone.
 
-- P001: small but interactive. Blue roles are distinct, Red has contact/blocker pressure, and the correct line is not just "move finisher forward."
 - P002: uses Rocks, Red pressure, and multiple tempting lanes. The geometry creates doubt about what must be opened and when.
 - P003: three Blue ground units create role ambiguity. The false heavy advance looks natural but loses the required breaker.
 - P004: the lure matters. Red Bastion movement is part of the contract; the Rock clear alone is insufficient.
@@ -113,7 +112,7 @@ Before presenting a candidate:
 - Check that the first action is not an obvious payoff.
 - Check that exactly one Blue unit is the final finisher.
 - Check that each support action changes legality, survivability, tempo, Red movement, or final damage.
-- Compare the geometry and interaction pattern against P001-P004 to avoid cloning.
+- Compare the geometry and interaction pattern against the existing public scenarios to avoid cloning.
 - If a qualitative claim cannot be computed or replayed, do not use it to approve the scenario.
 
 ## Import JSON Format
@@ -331,32 +330,6 @@ The compact format is not the final runtime payload. It is acceptable only if th
 ## Approved Puzzle Examples
 
 These are compact authoring JSON versions of the approved puzzles. They are examples for structure and interaction quality, not templates to copy.
-
-### P001 Example
-
-Why it matters: small board, active Red contact blocker, support plus finisher, and Red pressure that prevents the scenario from being a static route.
-
-```json
-{
-  "id": "P001",
-  "turnLimitRounds": 3,
-  "units": [
-    { "id": "blue_a_support", "name": "Earthstalker", "player": 1, "row": 5, "col": 5, "currentHp": 3 },
-    { "id": "blue_finisher", "name": "Crusher", "player": 1, "row": 7, "col": 4, "currentHp": 4 },
-    { "id": "red_commandant", "name": "Commandant", "player": 2, "row": 2, "col": 4, "currentHp": 4 },
-    { "id": "red_contact_blocker", "name": "Bastion", "player": 2, "row": 3, "col": 4, "currentHp": 3 },
-    { "id": "red_support_threat", "name": "Earthstalker", "player": 2, "row": 5, "col": 7, "currentHp": 3 }
-  ],
-  "scenarioRedPolicy": {
-    "seed": 1782660757,
-    "criticalBlueUnitIds": ["blue_finisher", "blue_a_support"],
-    "requiredCells": [
-      { "row": 3, "col": 5 },
-      { "row": 3, "col": 4 }
-    ]
-  }
-}
-```
 
 ### P002 Example
 

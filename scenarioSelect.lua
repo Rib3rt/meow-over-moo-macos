@@ -58,17 +58,6 @@ local LAYOUT = {
 
 local SCENARIO_DEFINITIONS = {
     {
-        id = "P001",
-        name = "Scenario P001",
-        status = "PROMOTED",
-        promotion = {
-            state = "promoted",
-            approved = true,
-            source = "verified_export_promoted_to_public_slot"
-        },
-        file = "scenarios/P001.lua"
-    },
-    {
         id = "P002",
         name = "Scenario P002",
         status = "PROMOTED",
@@ -87,7 +76,7 @@ local SCENARIO_DEFINITIONS = {
         promotion = {
             state = "promoted",
             approved = true,
-            source = "manual_playtest_breach_doubt_candidate"
+            source = "manual_playtest_spearhead_relay_4"
         },
         file = "scenarios/P003.lua"
     },
@@ -167,6 +156,17 @@ local SCENARIO_DEFINITIONS = {
             source = "manual_playtest_gate_march"
         },
         file = "scenarios/P010.lua"
+    },
+    {
+        id = "P011",
+        name = "Scenario P011",
+        status = "PROMOTED",
+        promotion = {
+            state = "promoted",
+            approved = true,
+            source = "manual_playtest_jagged_crusher_breach_6"
+        },
+        file = "scenarios/P011.lua"
     }
 }
 
@@ -938,7 +938,8 @@ local function activateScenario(index)
         status = row.status,
         createdBy = row.createdBy or DEFAULT_SCENARIO_CREATED_BY,
         solved = row.solved == true,
-        attempts = math.max(0, tonumber(row.attempts) or 0) + 1,
+        attempts = math.max(0, tonumber(row.attempts) or 0),
+        attemptRecorded = false,
         turnsTarget = turnsTarget,
         objectiveMessage = objectiveText,
         objectiveText = objectiveText,
