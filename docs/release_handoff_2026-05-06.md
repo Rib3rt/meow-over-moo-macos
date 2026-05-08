@@ -9,7 +9,7 @@
 ## Shipped Scenario Content
 
 - Scenario Mode is enabled by `SETTINGS.FEATURES.SCENARIO_MODE = true`.
-- The public scenario list ships 10 promoted puzzle scenarios: `P002` through `P011`.
+- The public scenario list ships 10 promoted puzzle scenarios: `P001` through `P010`.
 - The Scenario Editor remains internal and hidden by `SETTINGS.FEATURES.SCENARIO_EDITOR = false`.
 - Scenario Red runtime is shipped through `scenarioRedRuntime.lua`, `scenarioRedPolicy.lua`, `scenarioRulesKernel.lua`, and `scenarioStateEngine.lua`.
 - Standard `ai.lua` is not initialized for Scenario Mode.

@@ -95,6 +95,7 @@ Reject the scenario if any of these are true:
 
 Use these as quality examples, not templates to clone.
 
+- P001: small but interactive. Blue roles are distinct, Red has contact/blocker pressure, and the correct line is not just "move finisher forward."
 - P002: uses Rocks, Red pressure, and multiple tempting lanes. The geometry creates doubt about what must be opened and when.
 - P003: three Blue ground units create role ambiguity. The false heavy advance looks natural but loses the required breaker.
 - P004: the lure matters. Red Bastion movement is part of the contract; the Rock clear alone is insufficient.

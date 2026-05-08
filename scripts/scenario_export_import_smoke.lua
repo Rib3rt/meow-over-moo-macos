@@ -62,8 +62,14 @@ local function boardSignature(snapshot)
     return table.concat(parts, "|")
 end
 
-runTest("public_p002_is_promoted_release_level", function()
+runTest("public_p001_p002_are_promoted_release_levels", function()
     local expected = {
+        P001 = {
+            originalExportId = "Scenario#20260505115547-384",
+            blue = 2,
+            red = 3,
+            neutral = 0
+        },
         P002 = {
             originalExportId = "Scenario#20260505171632-565",
             blue = 2,
@@ -103,10 +109,10 @@ runTest("public_p002_is_promoted_release_level", function()
         assertTrue(type(snapshot.commandHubPositions[2]) == "table", scenarioId .. " missing Red Commandant hub position")
         signatures[scenarioId] = boardSignature(snapshot)
     end
-    assertTrue(signatures.P002 ~= nil, "P002 signature should be captured")
+    assertTrue(signatures.P001 ~= signatures.P002, "P001 and P002 must be different promoted boards")
 end)
 
-runTest("scenario_directory_contains_public_p002_through_p011", function()
+runTest("scenario_directory_contains_public_p001_through_p010", function()
     local pipe = io.popen("find scenarios -maxdepth 1 -type f -name '*.lua' | sort")
     assertTrue(pipe ~= nil, "failed to enumerate scenarios")
     local paths = {}
@@ -114,21 +120,21 @@ runTest("scenario_directory_contains_public_p002_through_p011", function()
         paths[#paths + 1] = line
     end
     pipe:close()
-    assertTrue(#paths == 10, "P002 through P011 should be public scenario files")
-    assertTrue(paths[1] == "scenarios/P002.lua", "P002 should be first public scenario")
-    assertTrue(paths[2] == "scenarios/P003.lua", "P003 should be second public scenario")
-    assertTrue(paths[3] == "scenarios/P004.lua", "P004 should be third public scenario")
-    assertTrue(paths[4] == "scenarios/P005.lua", "P005 should be fourth public scenario")
-    assertTrue(paths[5] == "scenarios/P006.lua", "P006 should be fifth public scenario")
-    assertTrue(paths[6] == "scenarios/P007.lua", "P007 should be sixth public scenario")
-    assertTrue(paths[7] == "scenarios/P008.lua", "P008 should be seventh public scenario")
-    assertTrue(paths[8] == "scenarios/P009.lua", "P009 should be eighth public scenario")
-    assertTrue(paths[9] == "scenarios/P010.lua", "P010 should be ninth public scenario")
-    assertTrue(paths[10] == "scenarios/P011.lua", "P011 should be tenth public scenario")
+    assertTrue(#paths == 10, "P001 through P010 should be public scenario files")
+    assertTrue(paths[1] == "scenarios/P001.lua", "P001 should be first public scenario")
+    assertTrue(paths[2] == "scenarios/P002.lua", "P002 should be second public scenario")
+    assertTrue(paths[3] == "scenarios/P003.lua", "P003 should be third public scenario")
+    assertTrue(paths[4] == "scenarios/P004.lua", "P004 should be fourth public scenario")
+    assertTrue(paths[5] == "scenarios/P005.lua", "P005 should be fifth public scenario")
+    assertTrue(paths[6] == "scenarios/P006.lua", "P006 should be sixth public scenario")
+    assertTrue(paths[7] == "scenarios/P007.lua", "P007 should be seventh public scenario")
+    assertTrue(paths[8] == "scenarios/P008.lua", "P008 should be eighth public scenario")
+    assertTrue(paths[9] == "scenarios/P009.lua", "P009 should be ninth public scenario")
+    assertTrue(paths[10] == "scenarios/P010.lua", "P010 should be tenth public scenario")
 end)
 
 runTest("public_scenarios_do_not_depend_on_over_base_hp", function()
-    for index = 2, 11 do
+    for index = 1, 10 do
         local path = string.format("scenarios/P%03d.lua", index)
         local scenario = loadScenario(path)
         for _, unit in ipairs((scenario.startSnapshot or {}).boardUnits or {}) do
@@ -177,15 +183,15 @@ runTest("retired_save_exports_are_not_left_for_discovery", function()
     assertTrue(#paths == 0, "retired exported scenarios should not be discoverable from save directory")
 end)
 
-runTest("public_p002_is_playable_and_manually_promoted", function()
-    local path = "scenarios/P002.lua"
+runTest("public_p001_is_playable_and_manually_promoted", function()
+    local path = "scenarios/P001.lua"
     local scenario = loadScenario(path)
-    assertTrue(scenario.id == "P002", "exported scenario id mismatch")
+    assertTrue(scenario.id == "P001", "exported scenario id mismatch")
     assertTrue(scenario.status == "PROMOTED", "editor export should be manually promoted")
     assertTrue(type(scenario.promotion) == "table", "editor export should include promotion metadata")
     assertTrue(scenario.promotion.state == "promoted", "editor export promotion state should be promoted")
     assertTrue(scenario.promotion.approved == true, "editor export should carry manual approval")
-    assertTrue(scenario.promotion.source == "scenario_editor_manual_export_promoted_to_public_slot", "public slot should record verified export promotion source")
+    assertTrue(scenario.promotion.source == "verified_export_promoted_to_public_slot", "public slot should record verified export promotion source")
     assertTrue(scenario.turnLimitRounds == 3, "exported scenario should preserve editor turn limit")
     assertTrue(type(scenario.scenarioRedPolicy) == "table", "exported scenario must include Scenario Red Policy metadata")
     assertTrue(scenario.scenarioRedPolicy.runtime == "scenarioRedRuntime", "exported scenario must use shipped scenario red runtime")
@@ -206,8 +212,8 @@ runTest("public_p002_is_playable_and_manually_promoted", function()
     assertTrue(type(snapshot.commandHubPositions[2]) == "table", "exported scenario missing Red Commandant hub position")
 end)
 
-runTest("p002_is_explicitly_promoted", function()
-    local scenario = loadScenario("scenarios/P002.lua")
+runTest("p001_is_explicitly_promoted", function()
+    local scenario = loadScenario("scenarios/P001.lua")
     assertTrue(scenario.status == "PROMOTED", "public scenario must be explicitly promoted")
     assertTrue(type(scenario.promotion) == "table", "public scenario should include promotion metadata")
     assertTrue(scenario.promotion.approved == true, "public scenario should be marked approved")

@@ -7,7 +7,7 @@
 - Steam Remote Play controls: ready
 - Steam online gameplay/lobby/invite flow: ready
 - Steam Deck control path: ready
-- Scenario Mode puzzle content: ready (`P002`-`P011`)
+- Scenario Mode puzzle content: ready (`P001`-`P010`)
 - Scenario progress persistence: ready (`ScenarioProgress.dat`)
 - Packaging workflow: ready
 - AI runtime: market release candidate

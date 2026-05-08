@@ -4,7 +4,7 @@ Updated: 2026-05-06
 
 ## Market Release Alignment
 
-- The market release line now ships Scenario Mode with 10 promoted manual puzzle scenarios (`P002` through `P011`).
+- The market release line now ships Scenario Mode with 10 promoted manual puzzle scenarios (`P001` through `P010`).
 - There is no separate non-puzzle / no-scenario release line.
 - The generator remains internal tooling. It is not the release production path for the 2026-05-06 market build.
 - The Scenario Editor remains hidden in the market build by `SETTINGS.FEATURES.SCENARIO_EDITOR = false`.
@@ -24,8 +24,8 @@ Do not blur these tracks. A manual scenario may be added to the public list for 
 
 Public Scenario list:
 
-- `P002` through `P011` are promoted market scenarios.
-- The retired first public slot has been removed from the runtime scenario set.
+- `P001` through `P010` are promoted market scenarios.
+- `Scenario#20260505115547-384` was promoted as `P001`.
 - `Scenario#20260505171632-565` was promoted as `P002`.
 - `P003` is a manual curated scenario: N=3, dual neutral Rock locks on the Commandant file, Artillery acts as support by clearing the lower and upper locks across separate turns, and Cloudstriker remains the unique finisher on turn 3.
 - Older exported scenarios and sidecars were removed from the LÖVE save-directory discovery path.

@@ -427,10 +427,10 @@ local function makeScenarioUnitId(unit, index)
 end
 
 local function normalizeScenarioCode(rawCode)
-    local value = tostring(rawCode or "P002")
+    local value = tostring(rawCode or "P001")
     value = value:gsub("^%s+", ""):gsub("%s+$", "")
     if value == "" then
-        return "P002"
+        return "P001"
     end
     return value
 end

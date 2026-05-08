@@ -358,12 +358,12 @@ runTest("runtime_state_uses_stable_scenario_unit_ids_after_movement", function()
     assertEquals(afterRed.col, 5, "stable id should follow the moved unit")
 end)
 
-runTest("p002_advertised_turn_limit_matches_current_contract_label", function()
-    local scenario = dofile("scenarios/P002.lua")
-    assertEquals(scenario.turnLimitRounds, 3, "P002 should advertise the certified three-turn contract")
-    assertTrue(tostring(scenario.objectiveText or ""):find("3 turns", 1, true) ~= nil, "P002 objective text should match turn limit")
+runTest("p001_advertised_turn_limit_matches_current_contract_label", function()
+    local scenario = dofile("scenarios/P001.lua")
+    assertEquals(scenario.turnLimitRounds, 3, "P001 should advertise the certified three-turn contract")
+    assertTrue(tostring(scenario.objectiveText or ""):find("3 turns", 1, true) ~= nil, "P001 objective text should match turn limit")
     for index, unitState in ipairs(scenario.startSnapshot and scenario.startSnapshot.boardUnits or {}) do
-        assertTrue(type(unitState.scenarioUnitId) == "string" and unitState.scenarioUnitId ~= "", "P002 board unit needs stable scenarioUnitId at index " .. tostring(index))
+        assertTrue(type(unitState.scenarioUnitId) == "string" and unitState.scenarioUnitId ~= "", "P001 board unit needs stable scenarioUnitId at index " .. tostring(index))
     end
 end)
 
