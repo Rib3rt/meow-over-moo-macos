@@ -833,6 +833,184 @@ runTest("endgame_late_aggression_starts_after_turn_50_for_unit_advantage_or_equa
     assertTrue(lateMidScore.breakdown.endgameLateAggression ~= nil, "turn 51 aggression should not depend on supply endgame")
 end)
 
+runTest("mid_unit_balance_counts_supply_and_is_symmetric", function()
+    local scorer = require("ai_tournament.mid_score")
+    local ai = mkAI()
+    local state = stateWith(1)
+    state.units = {
+        unit("Crusher", 1, 2, 2),
+        unit("Wingstalker", 1, 2, 3),
+        unit("Crusher", 2, 5, 5),
+        unit("Wingstalker", 2, 5, 6),
+        unit("Earthstalker", 2, 6, 5),
+        unit("Cloudstriker", 2, 6, 6),
+        unit("Bastion", 2, 7, 6)
+    }
+    state.supply = {[1] = {}, [2] = {}}
+
+    local candidate = {
+        signature = "mid_balance_attack",
+        containsAttack = true,
+        containsDeploy = false,
+        actions = {{type = "attack"}},
+        tacticalTags = {midV2 = true},
+        midTrade = {
+            accepted = true,
+            reason = "mid_trade_commandant_pressure",
+            class = "pressure",
+            totalDamage = 2,
+            kills = 0,
+            commandantDamage = 1,
+            materialDelta = -30,
+            hpTradeNet = 1,
+            expectedLoss = 40,
+            counterCredit = 0,
+            score = 0
+        }
+    }
+
+    local losingCtx = ctxWith({}, {})
+    losingCtx.cfg.PIPELINE_V2_MID_UNIT_BALANCE_GAP_THRESHOLD = 3
+    local losingScore = scorer.score(ai, state, losingCtx, clone(candidate), {})
+    assertEquals(losingScore.breakdown.midUnitBalance.delta, -3, "p1 should see the unit balance as losing")
+    assertEquals(losingScore.breakdown.midUnitBalance.mode, "losing_attack_tempered")
+
+    local winningCtx = ctxWith({}, {})
+    winningCtx.aiPlayer = 2
+    winningCtx.enemyPlayer = 1
+    local winningScore = scorer.score(ai, state, winningCtx, clone(candidate), {})
+    assertEquals(winningScore.breakdown.midUnitBalance.delta, 3, "p2 should see the same state as winning")
+    assertEquals(winningScore.breakdown.midUnitBalance.mode, "winning_attack_pressure")
+
+    local supplied = clone(state)
+    supplied.supply[1] = {
+        {name = "Bastion"},
+        {name = "Cloudstriker"},
+        {name = "Healer"}
+    }
+    local suppliedScore = scorer.score(ai, supplied, losingCtx, clone(candidate), {})
+    assertTrue(suppliedScore.breakdown.midUnitBalance == nil, "reserve supply should count toward total unit balance")
+end)
+
+runTest("mid_unit_balance_tempers_losing_attack_without_veto", function()
+    local scorer = require("ai_tournament.mid_score")
+    local ai = mkAI()
+    local context = ctxWith({}, {})
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_GAP_THRESHOLD = 3
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_LOSING_ATTACK_PENALTY = 2000
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_LOSING_EXPECTED_LOSS_WEIGHT = 20
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_LOSING_DEFENSE_BONUS = 1000
+    local state = stateWith(1)
+    state.units = {
+        unit("Crusher", 1, 2, 2),
+        unit("Wingstalker", 1, 2, 3),
+        unit("Crusher", 2, 5, 5),
+        unit("Wingstalker", 2, 5, 6),
+        unit("Earthstalker", 2, 6, 5),
+        unit("Cloudstriker", 2, 6, 6),
+        unit("Bastion", 2, 7, 6)
+    }
+    state.supply = {[1] = {}, [2] = {}}
+
+    local attackCandidate = {
+        signature = "losing_attack",
+        containsAttack = true,
+        containsDeploy = false,
+        actions = {{type = "attack"}},
+        tacticalTags = {midV2 = true},
+        midTrade = {
+            accepted = true,
+            reason = "mid_trade_commandant_pressure",
+            class = "pressure",
+            totalDamage = 2,
+            kills = 0,
+            commandantDamage = 1,
+            materialDelta = -30,
+            hpTradeNet = 1,
+            expectedLoss = 70,
+            counterCredit = 0,
+            score = 0
+        }
+    }
+    local positionCandidate = {
+        signature = "losing_cover",
+        containsAttack = false,
+        containsDeploy = false,
+        actions = {{type = "move"}},
+        tacticalTags = {midV2 = true},
+        midPosition = {
+            accepted = true,
+            reason = "mid_cover",
+            score = 0,
+            targetValue = 0,
+            pressureGain = 0,
+            exposureDamage = 0,
+            covered = true,
+            intent = "cover",
+            riskBand = "stable"
+        }
+    }
+
+    local attackScore = scorer.score(ai, state, context, clone(attackCandidate), {})
+    local positionScore = scorer.score(ai, state, context, clone(positionCandidate), {})
+
+    assertEquals(attackScore.tier, require("ai_tournament.score").TIER.NORMAL, "losing attack remains legal/scored")
+    assertEquals(attackScore.breakdown.midUnitBalance.mode, "losing_attack_tempered")
+    assertEquals(positionScore.breakdown.midUnitBalance.mode, "losing_defensive_posture")
+    assertTrue(attackScore.force < 0, "losing attack should lose force, not be vetoed")
+    assertTrue(positionScore.survival > 0, "covered posture should receive a defensive bias")
+end)
+
+runTest("mid_unit_balance_pushes_winning_side_to_attack_under_draw_pressure", function()
+    local scorer = require("ai_tournament.mid_score")
+    local ai = mkAI()
+    local context = ctxWith({}, {})
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_GAP_THRESHOLD = 3
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_WINNING_ATTACK_BONUS = 1000
+    context.cfg.PIPELINE_V2_MID_UNIT_BALANCE_WINNING_DRAW_BONUS = 1000
+    local state = stateWith(1)
+    state.currentTurn = 11
+    state.turnNumber = 11
+    state.turnsWithoutDamage = 2
+    state.units = {
+        unit("Crusher", 1, 2, 2),
+        unit("Wingstalker", 1, 2, 3),
+        unit("Earthstalker", 1, 3, 2),
+        unit("Cloudstriker", 1, 3, 3),
+        unit("Bastion", 1, 4, 3),
+        unit("Crusher", 2, 6, 6),
+        unit("Wingstalker", 2, 6, 7)
+    }
+    state.supply = {[1] = {}, [2] = {}}
+
+    local candidate = {
+        signature = "winning_attack",
+        containsAttack = true,
+        containsDeploy = false,
+        actions = {{type = "attack"}},
+        tacticalTags = {midV2 = true},
+        midTrade = {
+            accepted = true,
+            reason = "mid_trade_damage",
+            class = "pressure",
+            totalDamage = 2,
+            factionAttackCount = 1,
+            kills = 0,
+            commandantDamage = 0,
+            materialDelta = 0,
+            hpTradeNet = 2,
+            expectedLoss = 0,
+            counterCredit = 0,
+            score = 0
+        }
+    }
+
+    local score = scorer.score(ai, state, context, clone(candidate), {})
+    assertEquals(score.breakdown.midUnitBalance.mode, "winning_attack_pressure")
+    assertTrue(score.breakdown.midUnitBalance.drawActive == true, "draw pressure should be visible in the winning attack boost")
+    assertTrue(score.force > 0, "winning side should receive extra attack pressure")
+end)
+
 runTest("draw_pressure_urgency_starts_at_minus_four_and_peaks_before_draw", function()
     local drawPressure = require("ai_tournament.draw_pressure")
     local ai = mkAI()

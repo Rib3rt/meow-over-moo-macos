@@ -3339,7 +3339,7 @@ function M.mixin(aiClass, shared)
             includeAttack = true,
             includeRepair = true,
             includeDeploy = true,
-            allowFullHpHealerRepairException = false
+            allowFullHpHealerRepairException = ACTION_RULE_CONTRACT.HEALER_FULL_HP_REPAIR_EXCEPTION == true
         })
 
         local allActions = {}
@@ -3411,15 +3411,16 @@ function M.mixin(aiClass, shared)
             elseif action and entry.type == "repair" and target then
                 local targetMaxHp = unitsInfo:getUnitHP(target, "RANDOM_ACTION_REPAIR_MAX_HP")
                 local targetCurrentHp = target.currentHp or targetMaxHp
-                if targetCurrentHp < targetMaxHp then
-                    table.insert(allActions, {
-                        unit = unit,
-                        action = action,
-                        actionType = "repair",
-                        reason = "healing_repair",
-                        priority = valueOr(randomActionConfig.HEALING_REPAIR_PRIORITY, defaultRandomActionConfig.HEALING_REPAIR_PRIORITY)
-                    })
-                end
+                local healsMissingHp = targetCurrentHp < targetMaxHp
+                table.insert(allActions, {
+                    unit = unit,
+                    action = action,
+                    actionType = "repair",
+                    reason = healsMissingHp and "healing_repair" or "full_hp_repair_filler",
+                    priority = healsMissingHp
+                        and valueOr(randomActionConfig.HEALING_REPAIR_PRIORITY, defaultRandomActionConfig.HEALING_REPAIR_PRIORITY)
+                        or valueOr(randomActionConfig.FULL_HP_REPAIR_PRIORITY, defaultRandomActionConfig.FULL_HP_REPAIR_PRIORITY)
+                })
             elseif action and entry.type == "supply_deploy" then
                 table.insert(allActions, {
                         unit = nil,

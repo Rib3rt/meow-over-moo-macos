@@ -1,5 +1,6 @@
 local earlyPlanner = require("ai_tournament.early_planner")
 local drawPressure = require("ai_tournament.draw_pressure")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -1259,6 +1260,22 @@ function M.scoreOwnTurnFast(ai, beforeState, afterOurTurn, candidate, ctx)
             lethal = tags.fullTurnMoveRiskLethal == true,
             suicidal = tags.fullTurnMoveRiskSuicidal == true
         }
+    end
+
+    local fullHpRepairPenalty = repairHeuristics.sequenceFullHpRepairPenalty(
+        ai,
+        beforeState,
+        candidate and candidate.actions or {},
+        ctx,
+        ctx and ctx.aiPlayer or nil
+    )
+    if num(fullHpRepairPenalty and fullHpRepairPenalty.penalty, 0) > 0 then
+        candidate.tacticalTags = candidate.tacticalTags or {}
+        candidate.tacticalTags.fullHpRepair = true
+        candidate.tacticalTags.fullHpRepairCount = fullHpRepairPenalty.count
+        score.efficiency = score.efficiency - fullHpRepairPenalty.penalty
+        score.breakdown.reasons[#score.breakdown.reasons + 1] = "full_hp_repair_penalty"
+        score.breakdown.fullHpRepairPenalty = fullHpRepairPenalty
     end
 
     if isPipelineV2EarlyRuntime(ctx)

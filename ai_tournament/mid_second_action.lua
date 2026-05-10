@@ -1,4 +1,5 @@
 local turnEnumerator = require("ai_tournament.turn_enumerator")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -188,26 +189,34 @@ local function deployRoleScore(action)
     return 0
 end
 
-local function secondActionScore(ctx, midMap, entry, fullTrade)
+local function fullHpRepairSecondPenalty(ai, beforeSecondState, ctx, action)
+    if action and action.type == "repair" and repairHeuristics.isFullHpRepair(ai, beforeSecondState, action) then
+        return repairHeuristics.fullHpRepairSecondActionPenalty(ctx)
+    end
+    return 0
+end
+
+local function secondActionScore(ai, beforeSecondState, ctx, midMap, entry, fullTrade)
     local action = entry and entry.action or nil
     local actionType = action and action.type or "unknown"
     local base = num(entry and entry.cheapScore, 0)
+    local fullHpPenalty = fullHpRepairSecondPenalty(ai, beforeSecondState, ctx, action)
     if actionType == "attack" then
         if not (fullTrade and fullTrade.accepted == true) then
             return -math.huge
         end
-        return base + num(fullTrade.score, 0) + 240
+        return base + num(fullTrade.score, 0) + 240 - fullHpPenalty
     end
     if actionType == "supply_deploy" then
-        return base + cellScore(ctx, midMap, action) + deployRoleScore(action) + 150
+        return base + cellScore(ctx, midMap, action) + deployRoleScore(action) + 150 - fullHpPenalty
     end
     if actionType == "move" then
-        return base + cellScore(ctx, midMap, action) + 90
+        return base + cellScore(ctx, midMap, action) + 90 - fullHpPenalty
     end
     if actionType == "repair" then
-        return base + cellScore(ctx, midMap, action) + 130
+        return base + cellScore(ctx, midMap, action) + 130 - fullHpPenalty
     end
-    return base + cellScore(ctx, midMap, action)
+    return base + cellScore(ctx, midMap, action) - fullHpPenalty
 end
 
 local function fallbackTradeForPrefix(prefix, rejectedTrade, afterState)
@@ -260,7 +269,8 @@ local function appendPrefixRecovery(ai, state, ctx, midMap, prefix, entries, fal
                 reason = "prefix_recovery"
             }, afterState)
             if recoveryTrade and afterState then
-                local score = secondActionScore(ctx, midMap, entry, recoveryTrade) - penalty
+                local beforeSecondState = prefix._midAfterState or state
+                local score = secondActionScore(ai, beforeSecondState, ctx, midMap, entry, recoveryTrade) - penalty
                 if entry.action.type == "attack" then
                     score = score - attackPenalty
                 end
@@ -402,7 +412,7 @@ function M.complete(ai, state, ctx, midMap, tradeModel, prefix, options)
         end
 
         if trade and trade.accepted == true then
-            local score = secondActionScore(ctx, midMap, entry, trade)
+            local score = secondActionScore(ai, afterPrefix, ctx, midMap, entry, trade)
             prepared[#prepared + 1] = {
                 entry = entry,
                 trade = trade,
@@ -422,7 +432,7 @@ function M.complete(ai, state, ctx, midMap, tradeModel, prefix, options)
                 or nil
             local fallbackTrade = fallbackTradeForPrefix(prefix, trade, afterState)
             if fallbackTrade and afterState then
-                local score = secondActionScore(ctx, midMap, entry, fallbackTrade) - 220
+                local score = secondActionScore(ai, afterPrefix, ctx, midMap, entry, fallbackTrade) - 220
                 fallbackPrepared[#fallbackPrepared + 1] = {
                     entry = entry,
                     trade = fallbackTrade,

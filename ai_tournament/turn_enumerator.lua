@@ -1,4 +1,5 @@
 local candidateBuckets = require("ai_tournament.candidate_buckets")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -86,7 +87,7 @@ local function simpleBucketForAction(entry)
     return "fallback"
 end
 
-local function cheapFirstActionScore(entry)
+local function cheapFirstActionScore(entry, state, ai, ctx)
     local action = entry and entry.action
     local actionType = action and action.type or "unknown"
     local base = 0
@@ -101,10 +102,14 @@ local function cheapFirstActionScore(entry)
     elseif actionType == "skip" then
         base = -100
     end
-    return base + num(entry and entry.cheapScore, 0)
+    local score = base + num(entry and entry.cheapScore, 0)
+    if actionType == "repair" then
+        score = repairHeuristics.capFullHpRepairCheapScore(ai, state, action, score, ctx)
+    end
+    return score
 end
 
-local function selectProductiveFirstActions(entries, maxTotal)
+local function selectProductiveFirstActions(entries, maxTotal, state, ai, ctx)
     local prepared = {}
     local seen = {}
     for _, raw in ipairs(entries or {}) do
@@ -120,7 +125,7 @@ local function selectProductiveFirstActions(entries, maxTotal)
                 normalized.action = entry.action
                 normalized.signature = signature
                 normalized.bucket = normalized.bucket or simpleBucketForAction(normalized)
-                normalized.cheapScore = cheapFirstActionScore(normalized)
+                normalized.cheapScore = cheapFirstActionScore(normalized, state, ai, ctx)
                 normalized.buckets = normalized.buckets or {normalized.bucket}
                 normalized.source = normalized.source or "productive_first_action"
                 prepared[#prepared + 1] = normalized
@@ -567,7 +572,7 @@ function M.generateFullTurnCandidates(ai, state, playerId, ctx, opts)
     local productivePrepared = nil
     if productiveEnumeration then
         local cheapShortlist = nil
-        cheapShortlist, productivePrepared = selectProductiveFirstActions(rawFirstActions, maxFirst)
+        cheapShortlist, productivePrepared = selectProductiveFirstActions(rawFirstActions, maxFirst, state, ai, ctx)
         firstActions = candidateBuckets.rankAndSelect(ai, state, cheapShortlist, playerId, ctx, {
             maxTotal = maxFirst,
             scanLimit = #cheapShortlist,

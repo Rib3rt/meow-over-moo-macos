@@ -1,4 +1,5 @@
 local unitsInfo = require("unitsInfo")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -901,6 +902,7 @@ function M.classifyAction(ai, state, action, playerId, ctx, opts)
             bucket = "repair"
             cheapScore = math.max(cheapScore, 1500 + (healed * 220) + (targetValue * 8))
         end
+        cheapScore = repairHeuristics.capFullHpRepairCheapScore(ai, state, action, cheapScore, ctx, tags)
     elseif actionType == "move" then
         local defense = evaluateDefenseDelta(ai, state, action, playerId, enemyPlayer, ownThreat, ctx)
         local afterState = defense and defense.afterState or simulateSingleAction(ai, state, action, playerId, ctx)

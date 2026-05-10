@@ -11,6 +11,7 @@ local budgetScope = require("ai_tournament.pipeline_v2_budget_scope")
 local softPressureScore = require("ai_tournament.pipeline_v2_soft_pressure_score")
 local drawPressure = require("ai_tournament.draw_pressure")
 local turnEnumerator = require("ai_tournament.turn_enumerator")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -387,7 +388,7 @@ local function actionDistance(action)
         + math.abs(num(action.unit.col, 0) - num(action.target.col, 0))
 end
 
-local function floorEntryScore(ctx, midMap, entry, stepIndex)
+local function floorEntryScore(ctx, midMap, entry, stepIndex, ai, state)
     local action = entry and entry.action or nil
     local actionType = action and action.type or "unknown"
     local value = targetValue(ctx, midMap, action)
@@ -398,6 +399,9 @@ local function floorEntryScore(ctx, midMap, entry, stepIndex)
         score = score + 135
     elseif actionType == "repair" then
         score = score + 115
+        if repairHeuristics.isFullHpRepair(ai, state, action) then
+            score = score - repairHeuristics.fullHpRepairSecondActionPenalty(ctx)
+        end
     elseif actionType == "attack" then
         score = score - 900
     end
@@ -413,10 +417,10 @@ local function containsActionType(actions, actionType)
     return false
 end
 
-local function buildMandatoryCandidate(ctx, actions, firstEntry, secondEntry, afterState, midMap)
+local function buildMandatoryCandidate(ai, state, ctx, actions, firstEntry, secondEntry, afterState, midMap, afterFirst)
     local copied = copyActions(actions)
-    local score = floorEntryScore(ctx, midMap, firstEntry, 1)
-        + floorEntryScore(ctx, midMap, secondEntry, 2)
+    local score = floorEntryScore(ctx, midMap, firstEntry, 1, ai, state)
+        + floorEntryScore(ctx, midMap, secondEntry, 2, ai, afterFirst)
     return {
         actions = copied,
         signature = sequenceSignature(ctx, copied),
@@ -453,8 +457,8 @@ local function buildMandatoryFloorPass(ai, state, ctx, midMap, opts)
     end
 
     table.sort(firstEntries, function(a, b)
-        local av = floorEntryScore(ctx, midMap, a, 1)
-        local bv = floorEntryScore(ctx, midMap, b, 1)
+        local av = floorEntryScore(ctx, midMap, a, 1, ai, state)
+        local bv = floorEntryScore(ctx, midMap, b, 1, ai, state)
         if av == bv then
             return tostring(a and a.signature or "") < tostring(b and b.signature or "")
         end
@@ -487,8 +491,8 @@ local function buildMandatoryFloorPass(ai, state, ctx, midMap, opts)
                     num(stats.pipelineV2MidMandatoryFloorSecondEntries, 0) + #secondEntries
             end
             table.sort(secondEntries, function(a, b)
-                local av = floorEntryScore(ctx, midMap, a, 2)
-                local bv = floorEntryScore(ctx, midMap, b, 2)
+                local av = floorEntryScore(ctx, midMap, a, 2, ai, afterFirst)
+                local bv = floorEntryScore(ctx, midMap, b, 2, ai, afterFirst)
                 if av == bv then
                     return tostring(a and a.signature or "") < tostring(b and b.signature or "")
                 end
@@ -518,12 +522,15 @@ local function buildMandatoryFloorPass(ai, state, ctx, midMap, opts)
                         if afterFull then
                             seen[signature] = true
                             out[#out + 1] = buildMandatoryCandidate(
+                                ai,
+                                state,
                                 ctx,
                                 actions,
                                 firstEntry,
                                 secondEntry,
                                 afterFull,
-                                midMap
+                                midMap,
+                                afterFirst
                             )
                         end
                     end

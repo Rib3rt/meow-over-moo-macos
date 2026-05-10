@@ -7,6 +7,7 @@ local earlyPositionStaging = require("ai_tournament.early_position_staging")
 local earlyPositionSupport = require("ai_tournament.early_position_support")
 local movePatternPenalty = require("ai_tournament.move_pattern_penalty")
 local deployBudget = require("ai_tournament.pipeline_v2_deploy_budget")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -610,7 +611,7 @@ local function actionDistance(action)
         + math.abs(num(action.unit.col, 0) - num(action.target.col, 0))
 end
 
-local function classifyTechnicalSecond(ctx, positionMap, entry)
+local function classifyTechnicalSecond(ai, beforeSecondState, ctx, positionMap, entry)
     local rawAction = entry and entry.action or nil
     local action = rawAction and rawAction.type == "move" and moveActionWithEntryUnit(entry) or rawAction
     if not (action and action.type) then
@@ -637,10 +638,13 @@ local function classifyTechnicalSecond(ctx, positionMap, entry)
         }
     end
     if action.type == "repair" then
+        local fullHpPenalty = repairHeuristics.isFullHpRepair(ai, beforeSecondState, action)
+            and repairHeuristics.fullHpRepairSecondActionPenalty(ctx)
+            or 0
         return {
             action = action,
             reason = "complete_technical_repair_step",
-            score = cheap * 0.04 + targetValue * 0.02,
+            score = cheap * 0.04 + targetValue * 0.02 - fullHpPenalty,
             targetCell = targetCell
         }
     end
@@ -673,7 +677,7 @@ local function selectTechnicalSecondAction(ai, state, afterFirstState, ctx, posi
             break
         end
         scanned = scanned + 1
-        local item = classifyTechnicalSecond(ctx, positionMap, entry)
+            local item = classifyTechnicalSecond(ai, afterFirstState, ctx, positionMap, entry)
         if item and item.action then
             local ok = validator(item.action, item.reason)
             if ok then

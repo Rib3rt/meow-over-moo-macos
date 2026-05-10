@@ -2,6 +2,7 @@ local punishMap = require("ai_tournament.punish_map")
 local turnEnumerator = require("ai_tournament.turn_enumerator")
 local movePatternPenalty = require("ai_tournament.move_pattern_penalty")
 local drawPressure = require("ai_tournament.draw_pressure")
+local repairHeuristics = require("ai_tournament.repair_heuristics")
 
 local M = {}
 
@@ -471,6 +472,9 @@ local function preScoreSecondAction(ai, afterPrefix, ctx, midMap, prefix, entry)
         score = score + 125
     elseif actionType == "repair" then
         score = score + 100
+        if repairHeuristics.isFullHpRepair(ai, afterPrefix, action) then
+            score = score - repairHeuristics.fullHpRepairSecondActionPenalty(ctx)
+        end
     end
 
     local unit = unitForActionSource(ai, afterPrefix, ctx, action)
@@ -559,12 +563,16 @@ local function scoreSecondAction(ai, beforeSecondState, ctx, midMap, prefix, ent
         and num(ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_MID_POSITION_SECOND_PRESSURE_DELTA_WEIGHT, 0.30)
         or 0
     local actionBonus = 0
+    local fullHpRepairPenalty = 0
     if actionType == "move" then
         actionBonus = 95
     elseif actionType == "supply_deploy" then
         actionBonus = 125
     elseif actionType == "repair" then
         actionBonus = 100
+        if repairHeuristics.isFullHpRepair(ai, beforeSecondState, action) then
+            fullHpRepairPenalty = repairHeuristics.fullHpRepairSecondActionPenalty(ctx)
+        end
     end
     local score = num(entry and entry.cheapScore, 0)
         + cellValue * 0.55
@@ -575,6 +583,7 @@ local function scoreSecondAction(ai, beforeSecondState, ctx, midMap, prefix, ent
         + drawScore
         - damage * 95
         - lethalPenalty
+        - fullHpRepairPenalty
     score = movePatternPenalty.adjustScore(ai, beforeSecondState, ctx, action, score, ctx and ctx.stats)
     return score,
         {

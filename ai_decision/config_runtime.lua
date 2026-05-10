@@ -1103,39 +1103,55 @@ function M.mixin(aiClass, shared)
 
                 if includeRepair and self:unitHasTag(unit, "healer") then
                     local repairCells = self:getValidRepairCells(state, unit.row, unit.col) or {}
-                    for _, cell in ipairs(repairCells) do
+                    local repairTargetSeen = {}
+                    local function addRepairTarget(cell, mandatoryException)
                         local target = self:getUnitAtPosition(state, cell.row, cell.col)
-                        if target and target.player == aiPlayer then
-                            addAction({
-                                type = "repair",
-                                unit = unit,
-                                target = target,
-                                action = {
-                                    type = "repair",
-                                    unit = {row = unit.row, col = unit.col},
-                                    target = {row = cell.row, col = cell.col}
-                                }
-                            })
+                        if not (target and target.player == aiPlayer) then
+                            return
                         end
+                        local key = tostring(cell.row) .. "," .. tostring(cell.col)
+                        if repairTargetSeen[key] then
+                            return
+                        end
+                        repairTargetSeen[key] = true
+                        addAction({
+                            type = "repair",
+                            unit = unit,
+                            target = target,
+                            action = {
+                                type = "repair",
+                                unit = {row = unit.row, col = unit.col},
+                                target = {row = cell.row, col = cell.col}
+                            },
+                            mandatoryException = mandatoryException
+                        })
                     end
 
-                    if allowFullHpHealerRepairException and #repairCells == ZERO then
+                    for _, cell in ipairs(repairCells) do
+                        addRepairTarget(cell, nil)
+                    end
+
+                    if allowFullHpHealerRepairException then
+                        local repairRange = unitsInfo:getUnitAttackRange(unit, "COLLECT_LEGAL_FULL_HP_REPAIR") or ONE
                         for _, dir in ipairs(self:getOrthogonalDirections()) do
-                            local checkRow = unit.row + dir.row
-                            local checkCol = unit.col + dir.col
-                            local target = self:getUnitAtPosition(state, checkRow, checkCol)
-                            if target and target.player == aiPlayer then
-                                addAction({
-                                    type = "repair",
-                                    unit = unit,
-                                    target = target,
-                                    action = {
-                                        type = "repair",
-                                        unit = {row = unit.row, col = unit.col},
-                                        target = {row = checkRow, col = checkCol}
-                                    },
-                                    mandatoryException = "healer_full_hp_repair"
-                                })
+                            for dist = ONE, repairRange do
+                                local checkRow = unit.row + (dir.row * dist)
+                                local checkCol = unit.col + (dir.col * dist)
+                                if checkRow < ONE or checkRow > GAME.CONSTANTS.GRID_SIZE
+                                    or checkCol < ONE or checkCol > GAME.CONSTANTS.GRID_SIZE then
+                                    break
+                                end
+                                local target = self:getUnitAtPosition(state, checkRow, checkCol)
+                                if target then
+                                    if target.player == aiPlayer then
+                                        local currentHp = target.currentHp or target.startingHp or MIN_HP
+                                        local maxHp = target.startingHp or MIN_HP
+                                        if currentHp >= maxHp then
+                                            addRepairTarget({row = checkRow, col = checkCol}, "healer_full_hp_repair")
+                                        end
+                                    end
+                                    break
+                                end
                             end
                         end
                     end
@@ -1330,6 +1346,14 @@ function M.mixin(aiClass, shared)
                 local targetValue = target and (self:getUnitBaseValue(target, state) or ZERO) or ZERO
                 local exceptionPenalty = entry.mandatoryException and NEGATIVE_ONE or ZERO
                 local doctrineBias = preferDeployOrPosition and 600 or ZERO
+                if healValue <= ZERO then
+                    local fullHpPenalty = valueOr(
+                        randomActionConfig.FULL_HP_REPAIR_SCORE_PENALTY,
+                        valueOr(defaultRandomActionConfig.FULL_HP_REPAIR_SCORE_PENALTY, 12000)
+                    )
+                    entry.fullHpRepair = true
+                    return 7600 + doctrineBias + targetValue + exceptionPenalty - fullHpPenalty
+                end
                 return 7600 + doctrineBias + (healValue * 100) + targetValue + exceptionPenalty
             elseif entry.type == "move" then
                 local unit = entry.unit

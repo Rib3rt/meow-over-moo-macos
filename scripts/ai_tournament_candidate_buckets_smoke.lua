@@ -237,6 +237,74 @@ runTest("cloudstriker_lane_deploy_is_classified_as_supply_offense", function()
     assertEquals(classified.bucket, "supply_offense", "Cloudstriker pressure lane should classify as supply_offense")
 end)
 
+runTest("full_hp_repair_remains_legal_but_is_bottom_bucketed", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+
+    local fixtureLib = require("scripts.ai_tournament_fixture_lib")
+    local candidateBuckets = require("ai_tournament.candidate_buckets")
+    local ai = mkAI(1)
+    local state = fixtureLib.buildBaseState({
+        actingPlayer = 1,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 1, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 8, col = 8, currentHp = 12, startingHp = 12},
+        units = {
+            {name = "Healer", player = 1, row = 4, col = 4, currentHp = 4, startingHp = 4},
+            {name = "Wingstalker", player = 1, row = 4, col = 5, currentHp = 3, startingHp = 3},
+            {name = "Crusher", player = 1, row = 5, col = 4, currentHp = 2, startingHp = 4}
+        }
+    })
+
+    local legalWithoutException = ai:collectLegalActions(state, {
+        aiPlayer = 1,
+        includeMove = false,
+        includeAttack = false,
+        includeRepair = true,
+        includeDeploy = false,
+        allowFullHpHealerRepairException = false
+    }) or {}
+    local fullHpWithoutException = false
+    for _, entry in ipairs(legalWithoutException) do
+        if fixtureLib.actionSignature(entry.action) == "repair:4,4->4,5" then
+            fullHpWithoutException = true
+            break
+        end
+    end
+    assertTrue(
+        not fullHpWithoutException,
+        "full-HP repair should not be emitted when the exception is disabled"
+    )
+
+    local legalWithException = ai:collectLegalActions(state, {
+        aiPlayer = 1,
+        includeMove = false,
+        includeAttack = false,
+        includeRepair = true,
+        includeDeploy = false,
+        allowFullHpHealerRepairException = true
+    }) or {}
+
+    local fullHpEntry = nil
+    local damagedEntry = nil
+    for _, entry in ipairs(legalWithException) do
+        local signature = fixtureLib.actionSignature(entry.action)
+        if signature == "repair:4,4->4,5" then
+            fullHpEntry = entry
+        elseif signature == "repair:4,4->5,4" then
+            damagedEntry = entry
+        end
+    end
+    assertTrue(fullHpEntry ~= nil, "full-HP repair should remain legal as a marked exception")
+    assertTrue(fullHpEntry.mandatoryException == "healer_full_hp_repair", "full-HP repair should be tagged as an exception")
+    assertTrue(damagedEntry ~= nil, "real damaged repair should still be present")
+
+    local classified = candidateBuckets.classifyAction(ai, state, fullHpEntry.action, 1, {cfg = {}}, {
+        entry = fullHpEntry
+    })
+    assertTrue(classified.tags.fullHpRepair == true, "full-HP repair should be explicitly tagged")
+    assertTrue((classified.cheapScore or 0) <= -20000, "full-HP repair should be strongly disincentivized")
+end)
+
 runTest("bucket_quotas_preserve_rare_supply_entries", function()
     local candidateBuckets = require("ai_tournament.candidate_buckets")
     local entries = {}

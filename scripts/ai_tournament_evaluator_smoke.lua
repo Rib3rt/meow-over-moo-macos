@@ -273,6 +273,91 @@ runTest("bastion_block_deploy_receives_survival_or_supply_value", function()
     assertTrue((score.survival or 0) > 0 or (score.supply or 0) > 0, "defensive Bastion deploy should gain survival/supply value")
 end)
 
+runTest("full_hp_repair_is_penalized_in_final_score", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+
+    local fixtureLib = require("scripts.ai_tournament_fixture_lib")
+    local evaluator = require("ai_tournament.evaluator")
+    local ai = mkAI(1)
+    local ctx = newCtx(1)
+    local state = fixtureLib.buildBaseState({
+        actingPlayer = 1,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 1, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 8, col = 8, currentHp = 12, startingHp = 12},
+        units = {
+            {name = "Healer", player = 1, row = 4, col = 4, currentHp = 4, startingHp = 4},
+            {name = "Wingstalker", player = 1, row = 4, col = 5, currentHp = 3, startingHp = 3}
+        }
+    })
+    local action = {
+        type = "repair",
+        unit = {row = 4, col = 4},
+        target = {row = 4, col = 5}
+    }
+    local after = ai:simulateActionSequenceForPlayer(state, {action}, 1, {})
+    local candidate = {
+        signature = "full_hp_repair",
+        actions = {action},
+        containsDeploy = false,
+        tacticalTags = {},
+        buckets = {"repair"}
+    }
+
+    local score = evaluator.scoreOwnTurnFast(ai, state, after, candidate, ctx)
+    assertTrue(candidate.tacticalTags.fullHpRepair == true, "candidate should be tagged as full-HP repair")
+    assertTrue(
+        score.breakdown.fullHpRepairPenalty and score.breakdown.fullHpRepairPenalty.count == 1,
+        "full-HP repair penalty should be reported"
+    )
+    assertTrue((score.efficiency or 0) <= -10000, "full-HP repair should carry a decisive efficiency penalty")
+end)
+
+runTest("move_plus_full_hp_repair_is_penalized_after_intermediate_state", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+
+    local fixtureLib = require("scripts.ai_tournament_fixture_lib")
+    local evaluator = require("ai_tournament.evaluator")
+    local ai = mkAI(1)
+    local ctx = newCtx(1)
+    local state = fixtureLib.buildBaseState({
+        actingPlayer = 1,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 1, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 8, col = 8, currentHp = 12, startingHp = 12},
+        units = {
+            {name = "Healer", player = 1, row = 4, col = 3, currentHp = 4, startingHp = 4},
+            {name = "Crusher", player = 1, row = 4, col = 5, currentHp = 4, startingHp = 4}
+        }
+    })
+    local moveAction = {
+        type = "move",
+        unit = {row = 4, col = 3},
+        target = {row = 4, col = 4}
+    }
+    local repairAction = {
+        type = "repair",
+        unit = {row = 4, col = 4},
+        target = {row = 4, col = 5}
+    }
+    local actions = {moveAction, repairAction}
+    local after = ai:simulateActionSequenceForPlayer(state, actions, 1, {})
+    local candidate = {
+        signature = "move_plus_full_hp_repair",
+        actions = actions,
+        containsDeploy = false,
+        tacticalTags = {},
+        buckets = {"positional_move", "repair"}
+    }
+
+    local score = evaluator.scoreOwnTurnFast(ai, state, after, candidate, ctx)
+    assertTrue(candidate.tacticalTags.fullHpRepair == true, "move+repair should be tagged after the move state")
+    assertTrue(
+        score.breakdown.fullHpRepairPenalty and score.breakdown.fullHpRepairPenalty.count == 1,
+        "move+full-HP repair should receive the same penalty"
+    )
+end)
+
 runTest("score_contains_stable_breakdown_fields", function()
     ensureHeadlessGlobals()
     GAME.CURRENT.AI_PLAYER_NUMBER = 1

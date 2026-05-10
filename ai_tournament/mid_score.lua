@@ -423,6 +423,16 @@ local function supplyCount(ctx, playerId, side)
     return 0
 end
 
+local function reserveSupplyCount(state, ctx, playerId, side)
+    if ctx and ctx.supply and side and ctx.supply[side] and ctx.supply[side].count ~= nil then
+        return num(ctx.supply[side].count, 0)
+    end
+    if ctx and ctx.phase and ctx.phase.supply and playerId ~= nil and ctx.phase.supply[playerId] ~= nil then
+        return num(ctx.phase.supply[playerId], 0)
+    end
+    return #(state and state.supply and state.supply[playerId] or {})
+end
+
 local function currentTurn(state, ctx)
     return num(
         state and (state.currentTurn or state.turnNumber),
@@ -463,6 +473,174 @@ local function boardUnitCount(ai, state, playerId)
         end
     end
     return total
+end
+
+local function midUnitBalanceState(ai, state, ctx)
+    if cfgBool(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_ENABLED", true) ~= true then
+        return nil
+    end
+    if isEndgameRuntime(ctx) or not (ctx and ctx.phase and ctx.phase.mid == true) then
+        return nil
+    end
+
+    local playerId = ctx and ctx.aiPlayer or state and state.currentPlayer
+    if not playerId then
+        return nil
+    end
+    local enemyPlayer = enemyPlayerFor(ai, state, ctx, playerId)
+    if not enemyPlayer then
+        return nil
+    end
+
+    local ownBoard = boardUnitCount(ai, state, playerId)
+    local enemyBoard = boardUnitCount(ai, state, enemyPlayer)
+    local ownSupply = reserveSupplyCount(state, ctx, playerId, "own")
+    local enemySupply = reserveSupplyCount(state, ctx, enemyPlayer, "enemy")
+    local ownTotal = ownBoard + ownSupply
+    local enemyTotal = enemyBoard + enemySupply
+    local delta = ownTotal - enemyTotal
+    local threshold = math.max(1, cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_GAP_THRESHOLD", 3))
+    local absDelta = math.abs(delta)
+    if absDelta < threshold then
+        return nil
+    end
+
+    return {
+        playerId = playerId,
+        enemyPlayer = enemyPlayer,
+        ownBoard = ownBoard,
+        enemyBoard = enemyBoard,
+        ownSupply = ownSupply,
+        enemySupply = enemySupply,
+        ownTotal = ownTotal,
+        enemyTotal = enemyTotal,
+        delta = delta,
+        threshold = threshold,
+        gap = absDelta - threshold + 1,
+        losing = delta <= -threshold,
+        winning = delta >= threshold
+    }
+end
+
+local function defensivePostureScale(candidate, position)
+    if candidate and candidate.containsDeploy == true then
+        return 0.80
+    end
+    local intent = tostring(position and position.intent or "")
+    local riskBand = tostring(position and position.riskBand or "")
+    if position and (position.covered == true or intent == "cover" or intent == "support" or intent == "retreat") then
+        return 1.0
+    end
+    if riskBand == "stable" or riskBand == "covered" or riskBand == "contested_ok" then
+        return 0.85
+    end
+    return 0.45
+end
+
+local function applyMidUnitBalance(score, ai, state, ctx, candidate, trade, position)
+    local balance = midUnitBalanceState(ai, state, ctx)
+    if not balance then
+        return
+    end
+
+    score.breakdown.reasons = score.breakdown.reasons or {}
+    local containsAttack = candidate and candidate.containsAttack == true
+    local draw = drawPressure.build(ai, state, ctx)
+    local value = 0
+    local mode = nil
+
+    if balance.losing then
+        if containsAttack and trade and trade.accepted == true then
+            local base = cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_LOSING_ATTACK_PENALTY", 1700)
+            local expectedLoss = math.max(0, num(trade.expectedLoss, 0) - num(trade.counterCredit, 0))
+            local lossPenalty = expectedLoss
+                * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_LOSING_EXPECTED_LOSS_WEIGHT", 22)
+            local commandantRushPenalty = 0
+            if num(trade.commandantDamage, 0) > 0
+                and num(trade.kills, 0) <= 0
+                and trade.commandantLethal ~= true then
+                commandantRushPenalty = num(trade.commandantDamage, 0)
+                    * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_LOSING_COMMANDANT_RUSH_PENALTY", 700)
+            end
+            local safeKillRelief = num(trade.kills, 0)
+                * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_LOSING_SAFE_KILL_RELIEF", 2600)
+                + math.max(0, num(trade.materialDelta, 0)) * 0.35
+            value = math.max(0, math.floor(base * balance.gap + lossPenalty + commandantRushPenalty - safeKillRelief))
+            if value > 0 then
+                score.force = score.force - value
+                score.risk = score.risk - math.floor(value * 0.25)
+                mode = "losing_attack_tempered"
+            end
+        elseif position and position.accepted == true then
+            local base = cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_LOSING_DEFENSE_BONUS", 900)
+            local scale = defensivePostureScale(candidate, position)
+            value = math.floor(base * balance.gap * scale)
+            if value > 0 then
+                score.survival = score.survival + value
+                mode = "losing_defensive_posture"
+            end
+        end
+    elseif balance.winning then
+        if containsAttack and trade and trade.accepted == true then
+            value = math.floor(
+                cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_ATTACK_BONUS", 1300) * balance.gap
+                + num(trade.totalDamage, 0) * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_DAMAGE_WEIGHT", 90)
+                + num(trade.kills, 0) * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_KILL_BONUS", 700)
+                + num(trade.commandantDamage, 0) * cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_COMMANDANT_WEIGHT", 420)
+            )
+            if draw and draw.active == true then
+                value = value + math.floor(
+                    cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_DRAW_BONUS", 1100)
+                    * balance.gap
+                    * (1 + num(draw.urgencyRatio, 0))
+                )
+            end
+            if value > 0 then
+                score.force = score.force + value
+                mode = "winning_attack_pressure"
+            end
+        elseif draw and draw.active == true and position and position.accepted == true then
+            value = math.floor(
+                cfgNumber(ctx, "PIPELINE_V2_MID_UNIT_BALANCE_WINNING_PASSIVE_DRAW_PENALTY", 900)
+                * balance.gap
+                * (1 + num(draw.urgencyRatio, 0))
+            )
+            if value > 0 then
+                score.force = score.force - value
+                mode = "winning_passive_draw_pressure"
+            end
+        end
+    end
+
+    if mode then
+        score.breakdown.reasons[#score.breakdown.reasons + 1] = "mid_unit_balance_" .. mode
+        score.breakdown.midUnitBalance = {
+            mode = mode,
+            value = value,
+            ownBoard = balance.ownBoard,
+            enemyBoard = balance.enemyBoard,
+            ownSupply = balance.ownSupply,
+            enemySupply = balance.enemySupply,
+            ownTotal = balance.ownTotal,
+            enemyTotal = balance.enemyTotal,
+            delta = balance.delta,
+            threshold = balance.threshold,
+            gap = balance.gap,
+            drawActive = draw and draw.active == true or false,
+            drawUrgencyRatio = draw and draw.urgencyRatio or nil
+        }
+        if candidate then
+            candidate.tacticalTags = candidate.tacticalTags or {}
+            candidate.tacticalTags.midUnitBalanceMode = mode
+            candidate.tacticalTags.midUnitBalanceDelta = balance.delta
+        end
+        if ctx and ctx.stats then
+            ctx.stats.pipelineV2MidUnitBalanceApplied = num(ctx.stats.pipelineV2MidUnitBalanceApplied, 0) + 1
+            ctx.stats.pipelineV2MidUnitBalanceLastMode = mode
+            ctx.stats.pipelineV2MidUnitBalanceLastDelta = balance.delta
+            ctx.stats.pipelineV2MidUnitBalanceLastValue = value
+        end
+    end
 end
 
 local function skipActionCount(candidate)
@@ -828,6 +1006,7 @@ function M.score(ai, state, ctx, candidate, options)
         }
         applyDrawPressure(score, ai, state, ctx, candidate, nil, options)
         applyEndgamePressure(score, ai, state, ctx, candidate, nil, position, options)
+        applyMidUnitBalance(score, ai, state, ctx, candidate, nil, position)
         return scoreModel.finalize(score)
     end
 
@@ -866,6 +1045,7 @@ function M.score(ai, state, ctx, candidate, options)
     }
     applyDrawPressure(score, ai, state, ctx, candidate, trade, options)
     applyEndgamePressure(score, ai, state, ctx, candidate, trade, nil, options)
+    applyMidUnitBalance(score, ai, state, ctx, candidate, trade, nil)
 
     return scoreModel.finalize(score)
 end
