@@ -359,6 +359,25 @@ runTest("v2_only_runtime_defaults_are_unambiguous", function()
         120000,
         "suicidal early moves should be a large score penalty, not a gate rejection"
     )
+    assertEquals(
+        tournament.HARD_STAGE_EXTRA_MS,
+        1000,
+        "each hard phase should get additive budget before the soft pipelines resume"
+    )
+    assertTrue(
+        tournament.HARD_PUNISH_ENABLED == true,
+        "safe-kill hard punish should be a phase-agnostic hard control"
+    )
+    assertEquals(
+        tournament.PIPELINE_V2_FULL_TURN_MOVE_RISK_CARRY_SCALE,
+        1.0,
+        "early full-turn completion should carry risky second-action penalties into full-turn scoring"
+    )
+    assertEquals(
+        tournament.PIPELINE_V2_FULL_TURN_RISK_ALTERNATIVE_COMPLETIONS,
+        5,
+        "risky early full-turn completions should keep searching for score-only alternatives"
+    )
     assertTrue(
         tournament.PIPELINE_V2_EARLY_FORCED_MOVE_VALUE_ENABLED == true,
         "forced early movements should still be ordered by destination value"
@@ -2193,7 +2212,7 @@ runTest("v2_early_does_not_call_legacy_early_planner_scoring", function()
     )
 end)
 
-runTest("v2_early_owns_soft_combat_scope_without_hidden_generator", function()
+runTest("v2_early_answers_soft_combat_with_skirmish_candidates", function()
     ensureHeadlessGlobals()
     GAME.CURRENT.AI_PLAYER_NUMBER = 1
     local ai = mkAI(1)
@@ -2201,13 +2220,128 @@ runTest("v2_early_owns_soft_combat_scope_without_hidden_generator", function()
     local stats = meta.stats or {}
 
     assertEquals(meta.reason, "pipeline_v2_selected", "soft early combat scope should stay in V2")
-    assertEquals(meta.contract, "BUILD_POSITION", "soft combat should not steal early BUILD_POSITION")
     assertTrue(stats.pipelineV2Skipped ~= true, "V2 should not skip soft early combat scope")
     assertTrue(stats.pipelineV2FailedReason ~= "non_build_position_contract", "soft combat should not fall into V1")
-    assertTrue(isEarlyPositionSource(stats.selectedCandidateSource), "selection should come from V2 early-position candidates")
-    assertTrue(stats.selectedCandidateSource ~= nil, "early should expose its selected V2 candidate source")
+    assertTrue(stats.pipelineV2EarlySkirmishActive == true, "early combat contact should activate skirmish")
+    assertTrue((tonumber(stats.pipelineV2EarlySkirmishCandidates) or 0) > 0, "skirmish candidates should be generated")
+    assertTrue((tonumber(stats.combatGeneratedTotal) or 0) > 0, "combat candidates should be visible in core stats")
+    assertTrue(stats.selectedContainsAttack == true, "early skirmish must not be answered by passive BUILD_POSITION")
+    assertTrue(
+        tostring(stats.selectedCandidateSource or ""):find("early_skirmish", 1, true) ~= nil,
+        "selection should come from skirmish combat"
+    )
     assertTrue(stats.fallbackSource ~= "technical_fallback", "soft early combat should not use technical fallback")
-    assertNoNormalFullTurnCompetition(stats)
+end)
+
+runTest("early_skirmish_filters_suicidal_legal_attacks", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+    local ai = mkAI(1)
+    local originalIsSuicidalAttack = ai.isSuicidalAttack
+    ai.isSuicidalAttack = function(self, state, attacker, target)
+        if attacker and target and target.player ~= attacker.player then
+            return true
+        end
+        if originalIsSuicidalAttack then
+            return originalIsSuicidalAttack(self, state, attacker, target)
+        end
+        return false
+    end
+
+    local _, meta = choose(ai, pureCombatState())
+    local stats = meta.stats or {}
+    local reasons = stats.pipelineV2EarlySkirmishSafetyRejectedReasons or {}
+
+    assertTrue(
+        (tonumber(stats.pipelineV2EarlySkirmishLegalDirect) or 0) > 0
+            or (tonumber(stats.pipelineV2EarlySkirmishLegalMoves) or 0) > 0,
+        "fixture should expose legal early skirmish attacks"
+    )
+    assertTrue(
+        (tonumber(stats.pipelineV2EarlySkirmishSafetyRejected) or 0) > 0,
+        "legal early skirmish attacks should still pass through the suicidal safety guard"
+    )
+    assertTrue(
+        (tonumber(reasons.suicidal_attack) or 0) > 0,
+        "suicidal attack rejection should be observable in stats"
+    )
+    assertEquals(
+        tonumber(stats.pipelineV2EarlySkirmishCandidates) or 0,
+        0,
+        "suicidal legal attacks must not become early skirmish candidates"
+    )
+end)
+
+runTest("early_skirmish_defers_healer_attack_when_non_healer_combat_exists", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    local ai = mkAI(2)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 9,
+        currentTurn = 9,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 5, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 7, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 1, 7),
+            unit("Cloudstriker", 1, 3, 5),
+            unit("Cloudstriker", 1, 3, 8, {currentHp = 3}),
+            unit("Cloudstriker", 1, 2, 6),
+            unit("Wingstalker", 1, 2, 4),
+            unit("Crusher", 1, 2, 5),
+            unit("Wingstalker", 2, 4, 4),
+            unit("Wingstalker", 2, 8, 5),
+            unit("Cloudstriker", 2, 7, 5),
+            unit("Cloudstriker", 2, 7, 6),
+            unit("Healer", 2, 6, 7)
+        },
+        neutralBuildings = {
+            {row = 3, col = 2},
+            {row = 4, col = 5},
+            {row = 5, col = 6},
+            {row = 6, col = 6}
+        },
+        supply = {
+            [1] = {
+                supply("Wingstalker"),
+                supply("Crusher"),
+                supply("Bastion"),
+                supply("Earthstalker"),
+                supply("Healer"),
+                supply("Artillery")
+            },
+            [2] = {
+                supply("Crusher"),
+                supply("Crusher"),
+                supply("Bastion"),
+                supply("Bastion"),
+                supply("Cloudstriker"),
+                supply("Earthstalker"),
+                supply("Earthstalker"),
+                supply("Healer"),
+                supply("Artillery"),
+                supply("Artillery")
+            }
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertEquals(stats.coreExit, "pipeline_v2_selected", "fixture should stay in V2 after hard checks find no safe kill")
+    assertTrue(stats.pipelineV2EarlySkirmishActive == true, "contact should activate early skirmish")
+    assertTrue(
+        (tonumber(stats.pipelineV2EarlySkirmishHealerAttackRejected) or 0) > 0,
+        "Healer attack candidates should be held back when non-Healer skirmish candidates exist"
+    )
+    assertTrue(
+        tostring(stats.pipelineV2SelectedSignature or "") ~= "move:6,7>3,7|attack:3,7>3,8",
+        "the logged Healer move+attack should no longer be the selected skirmish line"
+    )
+    for _, action in ipairs(sequence or {}) do
+        assertTrue(
+            not (action and action.unit and action.unit.name == "Healer"),
+            "Healer should not be used as an attacker while a non-Healer combat answer exists"
+        )
+    end
 end)
 
 runTest("nonlethal_defense_pressure_stays_soft_for_v2", function()
@@ -2736,6 +2870,55 @@ runTest("hard_defense_contract_stays_outside_v2_build_position", function()
     assertTrue(stats.fallbackSource ~= "technical_fallback", "hard defense must not use technical fallback")
 end)
 
+runTest("hard_defense_immediate_lethal_uses_additive_budget_and_emergency_fallback", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    GAME.CURRENT.TURN = 8
+    local ai = mkAI(2)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 8,
+        currentTurn = 8,
+        playerOneHub = {name = "Commandant", player = 1, row = 2, col = 4, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 2, currentHp = 2, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 5, 4),
+            unit("Cloudstriker", 1, 4, 2, {currentHp = 2}),
+            unit("Cloudstriker", 1, 3, 4),
+            unit("Wingstalker", 1, 2, 5),
+            unit("Wingstalker", 1, 2, 1),
+            unit("Earthstalker", 2, 7, 7),
+            unit("Wingstalker", 2, 7, 3),
+            unit("Crusher", 2, 8, 3),
+            unit("Healer", 2, 4, 1)
+        },
+        neutralBuildings = {
+            {row = 3, col = 8},
+            {row = 4, col = 8},
+            {row = 5, col = 7},
+            {row = 6, col = 3}
+        },
+        supply = {
+            [1] = {supply("Wingstalker"), supply("Crusher"), supply("Bastion"), supply("Cloudstriker")},
+            [2] = {supply("Crusher"), supply("Bastion"), supply("Earthstalker"), supply("Artillery")}
+        }
+    }))
+    local stats = meta.stats or {}
+    local turnEnumerator = require("ai_tournament.turn_enumerator")
+    local signature = turnEnumerator.sequenceSignature(sequence or {})
+
+    assertEquals(meta.contract, "DEFEND_NOW", "Cloudstriker lethal on the Commandant must stay hard defense")
+    assertEquals(stats.coreExit, "hard_defense", "immediate lethal should not relax into V2 BUILD_POSITION")
+    assertTrue((tonumber(stats.hardDefenseExtraMs) or 0) >= 1000, "hard defense should receive additive budget")
+    assertTrue(stats.emergencyDefenseFallbackSelected == true, "emergency fallback should rescue timeout/no-rank hard defense")
+    assertTrue(stats.hardSelectionReason == "defend_now", "selected hard defense should be hard-locked")
+    assertTrue(
+        tostring(stats.passiveOverrideReason or "") ~= "defend_now_unresolved_lethal",
+        "unresolved lethal must not be accepted as a passive override"
+    )
+    assertTrue(signature:find(">6,2", 1, true) ~= nil, "selected defense should block the Cloudstriker line at B6")
+end)
+
 runTest("hard_defense_zero_damage_only_proof_falls_back_to_ranked_candidates", function()
     ensureHeadlessGlobals()
     GAME.CURRENT.AI_PLAYER_NUMBER = 1
@@ -2952,6 +3135,188 @@ runTest("hard_direct_safe_kill_rejects_unsafe_second_filler", function()
     end
 end)
 
+runTest("defend_now_pressure_safe_kill_preempts_v2_position", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    local ai = mkAI(2)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 3,
+        playerOneHub = {name = "Commandant", player = 1, row = 2, col = 6, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 6, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Artillery", 1, 2, 4),
+            unit("Earthstalker", 1, 6, 7),
+            unit("Earthstalker", 2, 6, 4),
+            unit("Crusher", 2, 6, 6)
+        },
+        neutralBuildings = {
+            {row = 3, col = 4},
+            {row = 4, col = 4},
+            {row = 5, col = 5},
+            {row = 6, col = 1}
+        },
+        supply = {
+            [1] = {supply("Bastion")},
+            [2] = {supply("Earthstalker"), supply("Bastion")}
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertEquals(stats.defenseKind, "pressure", "fixture should activate DEFEND_NOW pressure")
+    assertEquals(meta.contract, "DEFEND_NOW", "safe kill of the threat should satisfy DEFEND_NOW")
+    assertEquals(meta.reason, "hard_punish_defend_now_safe_kill", "defense safe kill should be the hard reason")
+    assertEquals(stats.coreExit, "hard_punish", "defense safe kill should preempt V2")
+    assertEquals(stats.hardSelectionReason, "defend_now_safe_kill", "hard reason should identify defense safe kill")
+    assertEquals(stats.hardPunishSelectedKind, "direct_safe_kill", "selected hard punish should be direct")
+    assertTrue(stats.pipelineV2Enabled ~= true, "V2 should not run after DEFEND_NOW safe kill")
+    assertEquals(sequence[1].type, "attack", "first action should kill the active threat")
+    assertEquals(sequence[1].unit.row, 6, "attack source row")
+    assertEquals(sequence[1].unit.col, 6, "attack source col")
+    assertEquals(sequence[1].target.row, 6, "attack target row")
+    assertEquals(sequence[1].target.col, 7, "attack target col")
+    assertTrue((tonumber(stats.selectedKillCount) or 0) > 0, "selected defense attack should kill the pressure unit")
+end)
+
+runTest("early_full_turn_super_penalizes_suicidal_second_move_without_veto", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    local ai = mkAI(2)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 2,
+        playerOneHub = {name = "Commandant", player = 1, row = 2, col = 4, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 8, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 3, 6),
+            unit("Cloudstriker", 1, 5, 4),
+            unit("Artillery", 1, 3, 4),
+            unit("Crusher", 2, 5, 8),
+            unit("Wingstalker", 2, 7, 7)
+        },
+        neutralBuildings = {
+            {row = 3, col = 3},
+            {row = 4, col = 6},
+            {row = 5, col = 7},
+            {row = 6, col = 7}
+        },
+        supply = {
+            [1] = {supply("Wingstalker"), supply("Bastion")},
+            [2] = {
+                supply("Wingstalker"),
+                supply("Cloudstriker"),
+                supply("Bastion"),
+                supply("Earthstalker"),
+                supply("Healer"),
+                supply("Artillery")
+            }
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertEquals(meta.contract, "BUILD_POSITION", "fixture should stay in early BUILD_POSITION")
+    assertEquals(stats.coreExit, "pipeline_v2_selected", "V2 should still own the position choice")
+    assertTrue((tonumber(stats.pipelineV2FullTurnRiskyCompleted) or 0) > 0, "risky full turns should remain candidate completions")
+    assertTrue((tonumber(stats.pipelineV2FullTurnMoveRiskPenaltyMax) or 0) >= 120000, "suicidal second moves should be heavily scored")
+    assertTrue(
+        tostring(stats.pipelineV2SelectedSignature or "") ~= "deploy:Artillery>6,8|move:5,8>3,8",
+        "suicidal full turn should lose to a safer full-turn alternative"
+    )
+    assertEquals(sequence[1].type, "move", "first selected action should keep the Crusher safe")
+    assertEquals(sequence[1].unit.row, 5, "Crusher source row")
+    assertEquals(sequence[1].unit.col, 8, "Crusher source col")
+    assertEquals(sequence[1].target.row, 6, "Crusher safe target row")
+    assertEquals(sequence[1].target.col, 8, "Crusher safe target col")
+    assertEquals(sequence[2].type, "move", "second selected action should be a nonlethal support move")
+    assertEquals(sequence[2].unit.row, 7, "Wingstalker source row")
+    assertEquals(sequence[2].unit.col, 7, "Wingstalker source col")
+    assertEquals(sequence[2].target.row, 7, "Wingstalker target row")
+    assertEquals(sequence[2].target.col, 6, "Wingstalker target col")
+end)
+
+runTest("early_skirmish_forced_by_opponent_preempts_passive_build_position", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    local ai = mkAI(2)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 8,
+        playerOneHub = {name = "Commandant", player = 1, row = 2, col = 4, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 2, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 4, 1),
+            unit("Earthstalker", 1, 4, 6),
+            unit("Wingstalker", 1, 2, 6),
+            unit("Cloudstriker", 1, 5, 5),
+            unit("Crusher", 1, 4, 3),
+            unit("Earthstalker", 2, 8, 6, {currentHp = 1}),
+            unit("Wingstalker", 2, 6, 2),
+            unit("Wingstalker", 2, 8, 4),
+            unit("Cloudstriker", 2, 7, 4),
+            unit("Cloudstriker", 2, 5, 3, {currentHp = 1}),
+            unit("Cloudstriker", 2, 7, 1)
+        },
+        neutralBuildings = {
+            {row = 3, col = 2},
+            {row = 4, col = 2},
+            {row = 5, col = 6},
+            {row = 6, col = 6}
+        },
+        supply = {
+            [1] = {supply("Wingstalker"), supply("Cloudstriker"), supply("Crusher")},
+            [2] = {supply("Healer"), supply("Earthstalker"), supply("Crusher"), supply("Bastion")}
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertEquals(stats.coreExit, "pipeline_v2_selected", "early V2 should still own the decision")
+    assertTrue(stats.pipelineV2EarlySkirmishActive == true, "enemy contact should activate early skirmish")
+    assertTrue((tonumber(stats.pipelineV2EarlySkirmishCandidates) or 0) > 0, "skirmish candidates should be generated")
+    assertTrue((tonumber(stats.combatGeneratedTotal) or 0) > 0, "combat generation should be recorded")
+    assertTrue(stats.selectedContainsAttack == true, "forced skirmish must not be answered with passive deploy/move")
+    assertTrue(stats.selectedPassiveOnly ~= true, "selected answer should not be passive-only")
+    assertTrue(sequence[1].type == "move" or sequence[1].type == "attack", "first action should be a combat line")
+end)
+
+runTest("early_skirmish_prevents_wingstalker_frontier_backtrack", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 2
+    local ai = mkAI(2)
+    local _, meta = choose(ai, baseState({
+        actingPlayer = 2,
+        turnNumber = 3,
+        playerOneHub = {name = "Commandant", player = 1, row = 2, col = 4, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 2, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 4, 4),
+            unit("Earthstalker", 1, 2, 1),
+            unit("Wingstalker", 1, 2, 6),
+            unit("Cloudstriker", 1, 3, 4),
+            unit("Earthstalker", 2, 7, 5),
+            unit("Wingstalker", 2, 6, 1),
+            unit("Wingstalker", 2, 7, 3)
+        },
+        neutralBuildings = {
+            {row = 3, col = 2},
+            {row = 4, col = 2},
+            {row = 5, col = 6},
+            {row = 6, col = 6}
+        },
+        supply = {
+            [1] = {supply("Wingstalker"), supply("Cloudstriker")},
+            [2] = {supply("Cloudstriker"), supply("Healer"), supply("Earthstalker"), supply("Crusher")}
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertTrue(stats.pipelineV2EarlySkirmishActive == true, "move-attack contact should activate early skirmish")
+    assertTrue(stats.selectedContainsAttack == true, "skirmish should beat frontier backtracking")
+    assertTrue(
+        tostring(stats.pipelineV2SelectedSignature or "") ~= "move:6,1>6,2|move:7,5>7,6",
+        "AI should not spend the turn undoing the previous Wingstalker move"
+    )
+end)
+
 runTest("hard_safe_move_attack_kill_preempts_v2_early_position", function()
     ensureHeadlessGlobals()
     GAME.CURRENT.AI_PLAYER_NUMBER = 1
@@ -3023,6 +3388,111 @@ runTest("hard_direct_safe_kill_preempts_v2_early_position", function()
     assertEquals(sequence[1].target.row, 5, "attack target row")
     assertEquals(sequence[1].target.col, 3, "attack target col")
     assertTrue((tonumber(stats.selectedKillCount) or 0) > 0, "selected direct attack should kill the exposed unit")
+end)
+
+runTest("hard_direct_safe_kill_preempts_same_target_move_attack_for_melee_units", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+    local ai = mkAI(1)
+    local state = baseState({
+        actingPlayer = 1,
+        turnNumber = 11,
+        currentTurn = 11,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 1, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 8, col = 8, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 5, 2),
+            unit("Earthstalker", 1, 2, 3),
+            unit("Earthstalker", 2, 5, 3)
+        },
+        neutralBuildings = {},
+        supply = {
+            [1] = {supply("Bastion")},
+            [2] = {supply("Bastion")}
+        }
+    })
+    local competingMoveKills = ai:findSafeMoveAttackKills(state, {}) or {}
+    local sequence, meta = choose(ai, state)
+    local stats = meta.stats or {}
+
+    assertTrue(#competingMoveKills > 0, "fixture should also expose a legal safe move+attack kill")
+    assertEquals(stats.phase, "mid", "fixture should verify this outside early-only assumptions")
+    assertEquals(meta.reason, "hard_punish_safe_kill", "direct safe kill should preempt same-target move+kill")
+    assertEquals(stats.coreExit, "hard_punish", "core exit should report hard punish")
+    assertEquals(stats.hardPunishSelectedKind, "direct_safe_kill", "selected hard punish should be direct")
+    assertEquals(sequence[1].type, "attack", "first action should be the one-action kill")
+    assertEquals(sequence[1].unit.row, 5, "direct kill source row")
+    assertEquals(sequence[1].unit.col, 2, "direct kill source col")
+    assertEquals(sequence[1].target.row, 5, "direct kill target row")
+    assertEquals(sequence[1].target.col, 3, "direct kill target col")
+    assertTrue((tonumber(stats.selectedKillCount) or 0) > 0, "selected direct attack should kill the target")
+end)
+
+runTest("hard_direct_safe_kill_preempts_mid_move_attack_same_target", function()
+    ensureHeadlessGlobals()
+    GAME.CURRENT.AI_PLAYER_NUMBER = 1
+    local ai = mkAI(1)
+    local sequence, meta = choose(ai, baseState({
+        actingPlayer = 1,
+        turnNumber = 11,
+        currentTurn = 11,
+        playerOneHub = {name = "Commandant", player = 1, row = 1, col = 5, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 7, col = 7, currentHp = 12, startingHp = 12},
+        units = {
+            unit("Earthstalker", 1, 1, 7),
+            unit("Cloudstriker", 1, 3, 5),
+            unit("Cloudstriker", 1, 3, 8, {currentHp = 3}),
+            unit("Cloudstriker", 1, 2, 6),
+            unit("Wingstalker", 1, 2, 4),
+            unit("Crusher", 1, 2, 5),
+            unit("Wingstalker", 2, 4, 4),
+            unit("Wingstalker", 2, 8, 5),
+            unit("Cloudstriker", 2, 7, 5),
+            unit("Cloudstriker", 2, 7, 6),
+            unit("Cloudstriker", 2, 6, 7),
+            unit("Healer", 2, 3, 6, {currentHp = 2})
+        },
+        neutralBuildings = {
+            {row = 3, col = 2},
+            {row = 4, col = 5},
+            {row = 5, col = 6},
+            {row = 6, col = 6}
+        },
+        supply = {
+            [1] = {
+                supply("Wingstalker"),
+                supply("Crusher"),
+                supply("Bastion"),
+                supply("Earthstalker"),
+                supply("Healer"),
+                supply("Artillery")
+            },
+            [2] = {
+                supply("Crusher"),
+                supply("Crusher"),
+                supply("Bastion"),
+                supply("Bastion"),
+                supply("Cloudstriker"),
+                supply("Earthstalker"),
+                supply("Earthstalker"),
+                supply("Healer"),
+                supply("Artillery"),
+                supply("Artillery")
+            }
+        }
+    }))
+    local stats = meta.stats or {}
+
+    assertEquals(meta.reason, "hard_punish_safe_kill", "phase-agnostic safe kill should preempt mid V2")
+    assertEquals(stats.phase, "mid", "fixture should reproduce the mid-game branch")
+    assertEquals(stats.coreExit, "hard_punish", "core exit should report hard punish")
+    assertEquals(stats.hardPunishSelectedKind, "direct_safe_kill", "same-result kill should prefer the direct attack")
+    assertEquals(sequence[1].type, "attack", "first action should be the direct kill")
+    assertEquals(sequence[1].unit.row, 3, "direct kill source row")
+    assertEquals(sequence[1].unit.col, 8, "direct kill source col")
+    assertEquals(sequence[1].target.row, 3, "direct kill target row")
+    assertEquals(sequence[1].target.col, 6, "direct kill target col")
+    assertTrue((tonumber(stats.selectedKillCount) or 0) > 0, "selected direct attack should kill the Healer")
 end)
 
 runTest("hard_safe_ranged_commandant_pressure_preempts_v2_early_position", function()

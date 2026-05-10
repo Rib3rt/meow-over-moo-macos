@@ -13,6 +13,7 @@ local steamRuntime = require("steam_runtime")
 local resumeStore = require("resume_store")
 local Controller = require("controller")
 local fontCache = require("fontCache")
+local musicToggleButton = require("music_toggle_button")
 
 local MONOGRAM_FONT_PATH = "assets/fonts/monogram-extended.ttf"
 
@@ -488,7 +489,10 @@ local function updateButtonSelection()
         local variant = isButtonEnabled(button) and "default" or "disabled"
         uiTheme.applyButtonVariant(button, variant)
         button.disabledVisual = not isButtonEnabled(button)
-        button.focused = navigationMode == "keyboard" and i == selectedButtonIndex and isButtonEnabled(button)
+        button.focused = navigationMode == "keyboard"
+            and not musicToggleButton.isFocused()
+            and i == selectedButtonIndex
+            and isButtonEnabled(button)
         button.currentColor = button.focused and getButtonHoverColor(button) or getButtonBaseColor(button)
     end
 end
@@ -519,6 +523,25 @@ ensureValidButtonSelection = function()
     if resolved then
         selectedButtonIndex = resolved
     end
+end
+
+local function focusMusicToggle()
+    if not musicToggleButton.isFocused() then
+        playHoverSound()
+    end
+    navigationMode = "keyboard"
+    musicToggleButton.setFocused(true)
+    updateButtonSelection()
+end
+
+local function focusMenuButtons()
+    if musicToggleButton.isFocused() then
+        playHoverSound()
+    end
+    navigationMode = "keyboard"
+    musicToggleButton.setFocused(false)
+    ensureValidButtonSelection()
+    updateButtonSelection()
 end
 
 --------------------------------------------
@@ -746,6 +769,8 @@ function mainMenu.draw()
         love.graphics.print(footerText, footerX, footerY)
     end
 
+    musicToggleButton.draw()
+
     love.graphics.setLineWidth(1)
 
     love.graphics.setFont(previousFont)
@@ -763,6 +788,7 @@ end
 function mainMenu.exit()
     stateMachineRef = nil
     pendingRemotePlayActivePrompt = false
+    musicToggleButton.resetHover()
     love.graphics.setColor(1, 1, 1) -- Reset color
     -------------------------------------------
     -- Code from here
@@ -784,6 +810,8 @@ function mainMenu.mousemoved(x, y, dx, dy, istouch)
 
     local transformedX = (x - SETTINGS.DISPLAY.OFFSETX) / SETTINGS.DISPLAY.SCALE
     local transformedY = (y - SETTINGS.DISPLAY.OFFSETY) / SETTINGS.DISPLAY.SCALE
+    local musicHovered = musicToggleButton.mousemoved(transformedX, transformedY)
+    musicToggleButton.setFocused(false)
 
     if not uiButtons then
         return
@@ -805,7 +833,10 @@ function mainMenu.mousemoved(x, y, dx, dy, istouch)
     end
 
     local currentHover = nil
-    local hoveredButton, hoveredIndex = findHoveredButton(transformedX, transformedY)
+    local hoveredButton, hoveredIndex = nil, nil
+    if not musicHovered then
+        hoveredButton, hoveredIndex = findHoveredButton(transformedX, transformedY)
+    end
     if hoveredButton then
         selectedButtonIndex = hoveredIndex
         if isButtonEnabled(hoveredButton) then
@@ -831,6 +862,12 @@ function mainMenu.mousepressed(x, y, button, istouch, presses)
     if button == 1 then
         local transformedX = (x - SETTINGS.DISPLAY.OFFSETX) / SETTINGS.DISPLAY.SCALE
         local transformedY = (y - SETTINGS.DISPLAY.OFFSETY) / SETTINGS.DISPLAY.SCALE
+
+        if musicToggleButton.mousepressed(transformedX, transformedY, button) then
+            navigationMode = "keyboard"
+            updateButtonSelection()
+            return true
+        end
 
         local buttons = uiButtons
         if not buttons then
@@ -935,6 +972,9 @@ function mainMenu.keypressed(key, scancode, isrepeat)
 
     navigationMode = "keyboard"
 
+    local isLeftKey = key == "left" or key == "a"
+    local isRightKey = key == "right" or key == "d"
+
     local function moveSelection(delta)
         if #buttonOrder == 0 then
             return
@@ -951,7 +991,30 @@ function mainMenu.keypressed(key, scancode, isrepeat)
         until attempts >= #buttonOrder or isButtonEnabled(buttonOrder[selectedButtonIndex])
     end
 
-    if key == "up" or key == "w" then
+    if musicToggleButton.isFocused() then
+        if isRightKey then
+            focusMenuButtons()
+            return true
+        elseif key == "return" or key == "space" then
+            musicToggleButton.toggle()
+            return true
+        elseif key == "escape" then
+            musicToggleButton.setFocused(false)
+            updateButtonSelection()
+            triggerSelectedButton(uiButtons.quit)
+            return true
+        elseif isLeftKey or key == "up" or key == "w" or key == "down" or key == "s" then
+            return true
+        end
+    end
+
+    if isLeftKey then
+        focusMusicToggle()
+        return true
+    elseif isRightKey then
+        updateButtonSelection()
+        return true
+    elseif key == "up" or key == "w" then
         moveSelection(-1)
         ensureValidButtonSelection()
         updateButtonSelection()

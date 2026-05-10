@@ -20,6 +20,30 @@ local function cap(ctx)
     return num(ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_POSITION_PATTERN_PENALTY_CAP, 220)
 end
 
+local function earlyRuntime(ctx)
+    return ctx
+        and ctx.phase
+        and ctx.phase.early == true
+        and (ctx.pipelineV2Runtime == true or (ctx.stats and ctx.stats.pipelineV2Enabled == true))
+end
+
+local function earlyPatternScale(ctx)
+    if not earlyRuntime(ctx) then
+        return 1
+    end
+    return math.max(1, num(ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_EARLY_POSITION_PATTERN_PENALTY_SCALE, 12))
+end
+
+local function earlyPatternCap(ctx)
+    if not earlyRuntime(ctx) then
+        return cap(ctx)
+    end
+    return math.max(
+        cap(ctx),
+        num(ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_EARLY_POSITION_PATTERN_PENALTY_CAP, 1800)
+    )
+end
+
 local function cloudstrikerMeleeEnabled(ctx)
     return not (ctx
         and ctx.cfg
@@ -159,7 +183,8 @@ function M.penalty(ai, state, ctx, action)
             nil
         )
         if ok then
-            patternPenalty = math.min(math.max(0, num(value, 0)), math.max(0, cap(ctx)))
+            patternPenalty = math.max(0, num(value, 0)) * earlyPatternScale(ctx)
+            patternPenalty = math.min(patternPenalty, math.max(0, earlyPatternCap(ctx)))
         end
     end
 

@@ -163,6 +163,11 @@ function M.rejects(ai, state, ctx, contracts, item)
         return reject(ctx, "v2_early_gate_incomplete_turn", candidate)
     end
 
+    local tags = candidate.tacticalTags or {}
+    if tags.earlySkirmish == true and hasAttack(candidate) then
+        return accept(ctx, "v2_early_gate_skirmish", candidate)
+    end
+
     if hasAttack(candidate) then
         return reject(ctx, "v2_early_gate_attack_not_build_position", candidate)
     end
@@ -172,7 +177,6 @@ function M.rejects(ai, state, ctx, contracts, item)
         return reject(ctx, "v2_early_gate_unknown_source", candidate)
     end
 
-    local tags = candidate.tacticalTags or {}
     local reason = tostring(tags.earlyPositionReason or "")
     if not reasonLooksV2Position(reason, ctx) then
         return reject(ctx, "v2_early_gate_unknown_position_reason", candidate)

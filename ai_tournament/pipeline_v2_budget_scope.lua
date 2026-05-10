@@ -23,6 +23,9 @@ function M.push(ctx, stats, opts)
     local remainingBeforeMs = ctx.remainingMs and ctx.remainingMs()
         or math.max(0, num(originalHardBudgetMs, 0) - elapsedMs)
     local extendedHardBudgetMs = math.max(num(originalHardBudgetMs, 0), elapsedMs + extraMs)
+    if options.additive == true then
+        extendedHardBudgetMs = math.max(num(originalHardBudgetMs, 0) + extraMs, elapsedMs + extraMs)
+    end
 
     ctx.hardBudgetMs = extendedHardBudgetMs
 

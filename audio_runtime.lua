@@ -1,5 +1,7 @@
 local audioRuntime = {}
 
+local MUSIC_SETTINGS_FILE = "AudioSettings.lua"
+
 local state = {
     initialized = false,
     lastPlaybackAt = nil,
@@ -36,7 +38,8 @@ local state = {
         targetVolume = 0,
         ducked = false,
         duckReason = nil
-    }
+    },
+    musicPreferenceLoaded = false
 }
 
 local function nowSeconds()
@@ -58,6 +61,65 @@ local function audioConfig()
         musicFadeInSec = tonumber(audio.MUSIC_FADE_IN_SEC) or 1.8,
         musicFadeSec = tonumber(audio.MUSIC_FADE_SEC) or 0.45,
     }
+end
+
+local function hasFilesystemRead()
+    return love
+        and love.filesystem
+        and type(love.filesystem.read) == "function"
+end
+
+local function hasFilesystemWrite()
+    return love
+        and love.filesystem
+        and type(love.filesystem.write) == "function"
+end
+
+local function parseSavedMusicPreference(content)
+    local raw = tostring(content or "")
+    local value = raw:match("MUSIC%s*=%s*(true)")
+        or raw:match("MUSIC%s*=%s*(false)")
+    if value == "true" then
+        return true
+    end
+    if value == "false" then
+        return false
+    end
+    return nil
+end
+
+local function ensureAudioSettings()
+    SETTINGS = SETTINGS or {}
+    SETTINGS.AUDIO = SETTINGS.AUDIO or {}
+    return SETTINGS.AUDIO
+end
+
+local function loadMusicPreference()
+    if state.musicPreferenceLoaded then
+        return
+    end
+    state.musicPreferenceLoaded = true
+
+    if not hasFilesystemRead() then
+        return
+    end
+
+    local ok, content = pcall(love.filesystem.read, MUSIC_SETTINGS_FILE)
+    if ok and content then
+        local saved = parseSavedMusicPreference(content)
+        if saved ~= nil then
+            ensureAudioSettings().MUSIC = saved
+        end
+    end
+end
+
+local function saveMusicPreference(enabled)
+    if not hasFilesystemWrite() then
+        return false
+    end
+    local payload = string.format("return {MUSIC = %s}\n", enabled and "true" or "false")
+    local ok = pcall(love.filesystem.write, MUSIC_SETTINGS_FILE, payload)
+    return ok == true
 end
 
 local function clamp01(value)
@@ -146,6 +208,7 @@ local function sampleActiveSourceCount(reason)
 end
 
 function audioRuntime.init()
+    loadMusicPreference()
     state.initialized = true
     sampleActiveSourceCount("init")
 end
@@ -212,6 +275,28 @@ function audioRuntime.setMusicDucked(ducked, reason)
     end
     state.music.targetVolume = computeMusicTargetVolume()
     return state.music.targetVolume
+end
+
+function audioRuntime.isMusicEnabled()
+    return audioConfig().musicEnabled == true
+end
+
+function audioRuntime.setMusicEnabled(enabled, opts)
+    local options = opts or {}
+    ensureAudioSettings().MUSIC = enabled ~= false
+    state.music.targetVolume = computeMusicTargetVolume()
+    if SETTINGS.AUDIO.MUSIC == false then
+        state.music.currentVolume = 0
+        setSourceVolume(state.music.source, 0)
+    end
+    if options.persist ~= false then
+        saveMusicPreference(SETTINGS.AUDIO.MUSIC ~= false)
+    end
+    return SETTINGS.AUDIO.MUSIC
+end
+
+function audioRuntime.toggleMusicEnabled()
+    return audioRuntime.setMusicEnabled(not audioRuntime.isMusicEnabled())
 end
 
 function audioRuntime.update(dt)

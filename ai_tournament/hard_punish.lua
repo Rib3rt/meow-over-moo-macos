@@ -144,17 +144,153 @@ local function hasEnemyCounter(ai, afterState, ctx, attacker)
     return reply ~= nil, reply
 end
 
+local function isDefensePressure(contracts)
+    return contracts
+        and contracts.defenseActive == true
+        and contracts.defenseKind == "pressure"
+end
+
+local function threatPayload(threatResult)
+    if not threatResult then
+        return nil
+    end
+    return threatResult.threat or threatResult
+end
+
+local function threatProjectedDamage(threatResult)
+    local threat = threatPayload(threatResult)
+    return num((threatResult and threatResult.projectedDamage) or (threat and threat.projectedDamage), 0)
+end
+
+local function threatAttackerCount(threatResult)
+    local threat = threatPayload(threatResult)
+    return #((threatResult and threatResult.damagingAttackers) or (threat and threat.damagingAttackers) or {})
+end
+
+local function threatHasImmediateDanger(threatResult)
+    local threat = threatPayload(threatResult)
+    return (threatResult and threatResult.immediateDanger == true)
+        or (threat and threat.immediateDanger == true)
+        or threatProjectedDamage(threatResult) > 0
+        or threatAttackerCount(threatResult) > 0
+end
+
+local function coordKey(row, col)
+    local r = tonumber(row)
+    local c = tonumber(col)
+    if not (r and c) then
+        return nil
+    end
+    return tostring(math.floor(r)) .. "," .. tostring(math.floor(c))
+end
+
+local function addThreatCell(cells, unit)
+    local key = coordKey(unit and unit.row, unit and unit.col)
+    if key then
+        cells[key] = true
+    end
+end
+
+local function threatAttackerCells(threatResult)
+    local threat = threatPayload(threatResult)
+    local cells = {}
+    for _, entry in ipairs((threatResult and threatResult.damagingAttackers) or (threat and threat.damagingAttackers) or {}) do
+        addThreatCell(cells, entry and entry.unit)
+        addThreatCell(cells, entry and entry.attacker)
+        addThreatCell(cells, entry and entry.source)
+        local directKey = coordKey(entry and entry.row, entry and entry.col)
+        if directKey then
+            cells[directKey] = true
+        end
+    end
+    return cells
+end
+
+local function selectionTargetsThreatUnit(selection, threatResult)
+    if not selection then
+        return false
+    end
+    local cells = threatAttackerCells(threatResult)
+    for _, action in ipairs(selection.actions or {}) do
+        if action and action.type == "attack" and action.target then
+            local key = coordKey(action.target.row, action.target.col)
+            if key and cells[key] then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function analyzeDefenseThreat(ai, state, ctx)
+    if not (ctx and ctx.threatModel and ctx.threatModel.analyzeHubThreatForPlayer) then
+        return nil
+    end
+    return ctx.threatModel.analyzeHubThreatForPlayer(ai, state, ctx.aiPlayer, ctx.enemyPlayer, ctx)
+end
+
+local function selectionReducesDefensePressure(ai, state, ctx, contracts, selection)
+    if not (selection and selection.actions and #selection.actions > 0) then
+        return false, "missing_selection_actions"
+    end
+    local beforeThreat = contracts and contracts.defenseThreat or nil
+    local afterState = simulate(ai, state, ctx, selection.actions)
+    if not afterState then
+        return false, "simulation_failed"
+    end
+    local afterThreat = analyzeDefenseThreat(ai, afterState, ctx)
+    local beforeProjected = threatProjectedDamage(beforeThreat)
+    local beforeCount = threatAttackerCount(beforeThreat)
+    local afterProjected = threatProjectedDamage(afterThreat)
+    local afterCount = threatAttackerCount(afterThreat)
+
+    if not threatHasImmediateDanger(afterThreat) then
+        return true, "pressure_cleared"
+    end
+    if afterProjected < beforeProjected then
+        return true, "projected_pressure_reduced"
+    end
+    if afterCount < beforeCount then
+        return true, "pressure_attacker_reduced"
+    end
+
+    return false, "pressure_not_reduced"
+end
+
+local function allowSelectionForDefensePressure(ai, state, ctx, contracts, selection)
+    if not isDefensePressure(contracts) then
+        return true, nil
+    end
+    if selection.kind == "ranged_commandant_pressure"
+        or selection.kind == "move_ranged_commandant_pressure" then
+        return false, "defense_pressure_requires_safe_kill"
+    end
+    if selectionTargetsThreatUnit(selection, contracts.defenseThreat) then
+        return true, "targets_pressure_source"
+    end
+    return selectionReducesDefensePressure(ai, state, ctx, contracts, selection)
+end
+
+local function markDefensePressureSelection(selection, proof)
+    selection.defensePressureResolved = true
+    selection.defensePressureProof = proof or "defend_now_safe_kill"
+    selection.reason = "hard_punish_defend_now_safe_kill"
+    selection.proof = "defend_now_safe_kill"
+    return selection
+end
+
 local function shouldRun(ai, state, ctx, contracts)
     if not (ai and state and ctx and ctx.cfg) then
         return false, "missing_context"
     end
-    if ctx.cfg.EARLY_HARD_PUNISH_ENABLED == false then
+    local enabled = ctx.cfg.HARD_PUNISH_ENABLED
+    if enabled == nil then
+        enabled = ctx.cfg.EARLY_HARD_PUNISH_ENABLED
+    end
+    if enabled == false then
         return false, "disabled"
     end
-    if not (ctx.phase and ctx.phase.early == true) then
-        return false, "not_early"
-    end
-    if contracts and contracts.defenseActive == true then
+    if contracts and contracts.defenseActive == true and not isDefensePressure(contracts) then
         return false, "hard_defense_contract"
     end
     if not (ai.findSafeKillAttacks and ai.findSafeMoveAttackKills) then
@@ -163,30 +299,26 @@ local function shouldRun(ai, state, ctx, contracts)
     return true, nil
 end
 
-local function directCandidate(ai, state)
-    local candidates = ai:findSafeKillAttacks(state, {}) or {}
-    return candidates[1], #candidates
+local function directCandidates(ai, state)
+    return ai:findSafeKillAttacks(state, {}) or {}
 end
 
-local function moveAttackCandidate(ai, state)
-    local candidates = ai:findSafeMoveAttackKills(state, {}) or {}
-    return candidates[1], #candidates
+local function moveAttackCandidates(ai, state)
+    return ai:findSafeMoveAttackKills(state, {}) or {}
 end
 
-local function twoUnitCandidate(ai, state)
+local function twoUnitCandidates(ai, state)
     if not (ai and ai.findTwoUnitKillCombinations) then
-        return nil, 0
+        return {}
     end
-    local candidates = ai:findTwoUnitKillCombinations(state, {}, true) or {}
-    return candidates[1], #candidates
+    return ai:findTwoUnitKillCombinations(state, {}, true) or {}
 end
 
-local function cloudstrikerLosCandidate(ai, state)
+local function cloudstrikerLosCandidates(ai, state)
     if not (ai and ai.findCorvetteLineOfSightKills) then
-        return nil, 0
+        return {}
     end
-    local candidates = ai:findCorvetteLineOfSightKills(state, {}) or {}
-    return candidates[1], #candidates
+    return ai:findCorvetteLineOfSightKills(state, {}) or {}
 end
 
 local function collectAttackEntries(ai, state, ctx)
@@ -421,83 +553,133 @@ end
 
 function M.select(ai, state, ctx, contracts)
     local stats = ctx and ctx.stats or {}
-    local enabled = ctx and ctx.cfg and ctx.cfg.EARLY_HARD_PUNISH_ENABLED ~= false
+    local cfg = ctx and ctx.cfg or {}
+    local enabled = cfg.HARD_PUNISH_ENABLED
+    if enabled == nil then
+        enabled = cfg.EARLY_HARD_PUNISH_ENABLED
+    end
+    enabled = enabled ~= false
+    stats.hardPunishEnabled = enabled
     stats.earlyHardPunishEnabled = enabled
+    local defensePressure = isDefensePressure(contracts)
 
     local canRun, skipReason = shouldRun(ai, state, ctx, contracts)
     if not canRun then
+        stats.hardPunishSkipped = skipReason
         stats.earlyHardPunishSkipped = skipReason
         return nil
     end
 
-    if ctx.cfg.EARLY_HARD_PUNISH_DIRECT_KILL_ENABLED ~= false then
-        local entry, count = directCandidate(ai, state)
-        stats.earlyHardPunishDirectSafeKills = count
-        local selected = buildDirect(entry)
-        if selected then
-            stats.earlyHardPunishSelected = selected.reason
-            stats.earlyHardPunishSelectedUnit = unitText(selected.unit)
-            stats.earlyHardPunishSelectedTarget = actionTargetText(selected.actions[1])
+    local function recordRejectedForPressure(selected, reason)
+        if not defensePressure then
+            return
+        end
+        stats.earlyHardPunishDefensePressureRejected =
+            num(stats.earlyHardPunishDefensePressureRejected, 0) + 1
+        stats.earlyHardPunishDefensePressureRejectReason = reason
+        stats.earlyHardPunishDefensePressureRejectedKind = selected and selected.kind or nil
+    end
+
+    local function accept(selected)
+        if not selected then
+            return nil
+        end
+        local allowed, proof = allowSelectionForDefensePressure(ai, state, ctx, contracts, selected)
+        if allowed then
+            if defensePressure then
+                return markDefensePressureSelection(selected, proof)
+            end
             return selected
+        end
+        recordRejectedForPressure(selected, proof)
+        return nil
+    end
+
+    local function recordSelected(selected)
+        stats.earlyHardPunishSelected = selected.reason
+        stats.earlyHardPunishSelectedUnit = unitText(selected.unit)
+        if selected.secondUnit then
+            stats.earlyHardPunishSelectedSecondUnit = unitText(selected.secondUnit)
+        end
+        stats.earlyHardPunishSelectedTarget = actionTargetText(selected.actions[#selected.actions])
+        if defensePressure then
+            stats.earlyHardPunishDefensePressureSelected = true
+            stats.earlyHardPunishDefensePressureProof = selected.defensePressureProof
+        end
+    end
+
+    if ctx.cfg.EARLY_HARD_PUNISH_DIRECT_KILL_ENABLED ~= false then
+        local candidates = directCandidates(ai, state)
+        stats.earlyHardPunishDirectSafeKills = #candidates
+        for _, entry in ipairs(candidates) do
+            local selected = accept(buildDirect(entry))
+            if selected then
+                recordSelected(selected)
+                return selected
+            end
         end
     else
         stats.earlyHardPunishDirectSafeKills = 0
     end
 
     if ctx.cfg.EARLY_HARD_PUNISH_MOVE_ATTACK_KILL_ENABLED ~= false then
-        local entry, count = moveAttackCandidate(ai, state)
-        stats.earlyHardPunishMoveAttackSafeKills = count
-        local selected = buildMoveAttack(entry)
-        if selected then
-            stats.earlyHardPunishSelected = selected.reason
-            stats.earlyHardPunishSelectedUnit = unitText(selected.unit)
-            stats.earlyHardPunishSelectedTarget = actionTargetText(selected.actions[2])
-            return selected
+        local candidates = moveAttackCandidates(ai, state)
+        stats.earlyHardPunishMoveAttackSafeKills = #candidates
+        for _, entry in ipairs(candidates) do
+            local selected = accept(buildMoveAttack(entry))
+            if selected then
+                recordSelected(selected)
+                return selected
+            end
         end
     else
         stats.earlyHardPunishMoveAttackSafeKills = 0
     end
 
     if ctx.cfg.EARLY_HARD_PUNISH_TWO_UNIT_KILL_ENABLED ~= false then
-        local entry, count = twoUnitCandidate(ai, state)
-        stats.earlyHardPunishTwoUnitSafeKills = count
-        local selected = buildTwoUnit(entry)
-        if selected then
-            stats.earlyHardPunishSelected = selected.reason
-            stats.earlyHardPunishSelectedUnit = unitText(selected.unit)
-            stats.earlyHardPunishSelectedSecondUnit = unitText(selected.secondUnit)
-            stats.earlyHardPunishSelectedTarget = actionTargetText(selected.actions[2])
-            return selected
+        local candidates = twoUnitCandidates(ai, state)
+        stats.earlyHardPunishTwoUnitSafeKills = #candidates
+        for _, entry in ipairs(candidates) do
+            local selected = accept(buildTwoUnit(entry))
+            if selected then
+                recordSelected(selected)
+                return selected
+            end
         end
     else
         stats.earlyHardPunishTwoUnitSafeKills = 0
     end
 
     if ctx.cfg.EARLY_HARD_PUNISH_CLOUDSTRIKER_LOS_KILL_ENABLED ~= false then
-        local entry, count = cloudstrikerLosCandidate(ai, state)
-        stats.earlyHardPunishCloudstrikerLosSafeKills = count
-        local selected = buildCloudstrikerLos(entry)
-        if selected then
-            stats.earlyHardPunishSelected = selected.reason
-            stats.earlyHardPunishSelectedUnit = unitText(selected.unit)
-            stats.earlyHardPunishSelectedSecondUnit = unitText(selected.secondUnit)
-            stats.earlyHardPunishSelectedTarget = actionTargetText(selected.actions[2])
-            return selected
+        local candidates = cloudstrikerLosCandidates(ai, state)
+        stats.earlyHardPunishCloudstrikerLosSafeKills = #candidates
+        for _, entry in ipairs(candidates) do
+            local selected = accept(buildCloudstrikerLos(entry))
+            if selected then
+                recordSelected(selected)
+                return selected
+            end
         end
     else
         stats.earlyHardPunishCloudstrikerLosSafeKills = 0
+    end
+
+    if defensePressure then
+        stats.earlyHardPunishRangedCommandantPressure = 0
+        stats.hardPunishSkipped = "defense_pressure_safe_kill_unavailable"
+        stats.earlyHardPunishSkipped = "defense_pressure_safe_kill_unavailable"
+        return nil
     end
 
     local pressureEntry, pressureCount = rangedCommandantPressureCandidate(ai, state, ctx)
     stats.earlyHardPunishRangedCommandantPressure = pressureCount
     local pressureSelected = buildRangedCommandantPressure(pressureEntry)
     if pressureSelected then
-        stats.earlyHardPunishSelected = pressureSelected.reason
-        stats.earlyHardPunishSelectedUnit = unitText(pressureSelected.unit)
-        stats.earlyHardPunishSelectedTarget = actionTargetText(pressureSelected.actions[#pressureSelected.actions])
+        recordSelected(pressureSelected)
         return pressureSelected
     end
 
+    stats.hardPunishSkipped = "no_safe_punish_kill_or_ranged_commandant_pressure"
     stats.earlyHardPunishSkipped = "no_safe_punish_kill_or_ranged_commandant_pressure"
     return nil
 end

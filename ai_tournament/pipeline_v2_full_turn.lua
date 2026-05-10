@@ -94,6 +94,10 @@ local function containsAction(actions, actionType)
     return false
 end
 
+local function fullTurnMoveRiskCarryScale(ctx)
+    return math.max(0, num(ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_FULL_TURN_MOVE_RISK_CARRY_SCALE, 1.0))
+end
+
 local function exactSanitizeEnabled(ctx)
     return not (ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_FULL_TURN_EXACT_SANITIZE_ENABLED == false)
 end
@@ -735,7 +739,19 @@ local function completedCandidate(ctx, candidate, actions, second)
             coverValueBonus = secondTarget.earlyCoverValueBonus or secondTarget.coverValueBonus
         }
     end
-    out.cheapScore = num(candidate and candidate.cheapScore, 0) + num(second and second.score, 0) * 0.12
+    local secondRisk = second and second.moveRisk or nil
+    local riskPenalty = num(secondRisk and secondRisk.penalty, 0)
+    local riskCarryPenalty = riskPenalty * fullTurnMoveRiskCarryScale(ctx)
+    out.cheapScore = num(candidate and candidate.cheapScore, 0)
+        + num(second and second.score, 0) * 0.12
+        - riskCarryPenalty
+    if riskPenalty > 0 then
+        out.tacticalTags.fullTurnMoveRiskPenalty = riskPenalty
+        out.tacticalTags.fullTurnMoveRiskCarryPenalty = riskCarryPenalty
+        out.tacticalTags.fullTurnMoveRiskReason = secondRisk and secondRisk.reason or nil
+        out.tacticalTags.fullTurnMoveRiskLethal = secondRisk and secondRisk.lethal == true or false
+        out.tacticalTags.fullTurnMoveRiskSuicidal = secondRisk and secondRisk.suicidal == true or false
+    end
     out.containsDeploy = containsAction(actions, "supply_deploy")
     out.containsAttack = containsAction(actions, "attack")
     out.completeTurn = true
@@ -771,6 +787,8 @@ function M.complete(ai, state, ctx, positionMap, candidates, opts)
         moveRiskPenaltyMax = 0,
         moveRiskLethal = 0,
         moveRiskSuicidal = 0,
+        riskyCompleted = 0,
+        riskyCompletionPenaltyMax = 0,
         completionAttempts = 0,
         reasonCounts = {},
         droppedReasons = {}
@@ -805,10 +823,21 @@ function M.complete(ai, state, ctx, positionMap, candidates, opts)
         0,
         maxCompletions
     )
+    local riskAlternativeCompletions = clampLimit(
+        options.riskAlternativeCompletions
+            or (ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_FULL_TURN_RISK_ALTERNATIVE_COMPLETIONS)
+            or 5,
+        0,
+        64
+    )
     local output = {}
     local seen = {}
     local fullFirstSeen = {}
     local incomplete = {}
+
+    local function needsRiskAlternatives()
+        return stats.riskyCompleted > 0 and stats.completed < riskAlternativeCompletions
+    end
 
     for _, candidate in ipairs(candidates or {}) do
         local actions = candidate and candidate.actions or {}
@@ -862,12 +891,12 @@ function M.complete(ai, state, ctx, positionMap, candidates, opts)
         local actions = candidate and candidate.actions or {}
         local firstAction = actions[1]
         local firstSignature = firstActionSignature(ctx, candidate)
-        local needsAlternativeCompletion = stats.completed < minCompletedAlternatives
+        local needsAlternativeCompletion = stats.completed < minCompletedAlternatives or needsRiskAlternatives()
         if not firstAction then
             addDropped(stats, "missing_first_action")
         elseif firstSignature and fullFirstSeen[firstSignature] and not needsAlternativeCompletion then
             addDropped(stats, "covered_by_existing_full_turn")
-        elseif stats.completed >= maxCompletions then
+        elseif stats.completed >= maxCompletions and not needsRiskAlternatives() then
             addDropped(stats, "completion_cap_reached")
         elseif stats.completionAttempts >= maxCompletionAttempts then
             addDropped(stats, "completion_attempt_cap_reached")
@@ -904,6 +933,11 @@ function M.complete(ai, state, ctx, positionMap, candidates, opts)
                             fullFirstSeen[firstSignature] = true
                         end
                         stats.completed = stats.completed + 1
+                        local riskPenalty = num(completed.tacticalTags and completed.tacticalTags.fullTurnMoveRiskPenalty, 0)
+                        if riskPenalty > 0 then
+                            stats.riskyCompleted = stats.riskyCompleted + 1
+                            stats.riskyCompletionPenaltyMax = math.max(stats.riskyCompletionPenaltyMax, riskPenalty)
+                        end
                     else
                         addDropped(stats, "duplicate_completed_signature")
                     end
@@ -940,6 +974,8 @@ function M.complete(ai, state, ctx, positionMap, candidates, opts)
         ctx.stats.pipelineV2FullTurnMoveRiskPenaltyMax = stats.moveRiskPenaltyMax
         ctx.stats.pipelineV2FullTurnMoveRiskLethal = stats.moveRiskLethal
         ctx.stats.pipelineV2FullTurnMoveRiskSuicidal = stats.moveRiskSuicidal
+        ctx.stats.pipelineV2FullTurnRiskyCompleted = stats.riskyCompleted
+        ctx.stats.pipelineV2FullTurnRiskyCompletionPenaltyMax = stats.riskyCompletionPenaltyMax
         ctx.stats.pipelineV2FullTurnCompletionAttempts = stats.completionAttempts
         ctx.stats.pipelineV2FullTurnReasonCounts = stats.reasonCounts
         ctx.stats.pipelineV2FullTurnDroppedReasons = stats.droppedReasons

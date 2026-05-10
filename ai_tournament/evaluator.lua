@@ -1248,6 +1248,36 @@ function M.scoreOwnTurnFast(ai, beforeState, afterOurTurn, candidate, ctx)
         }
     end
 
+    if tags and num(tags.fullTurnMoveRiskCarryPenalty, 0) > 0 then
+        local penalty = num(tags.fullTurnMoveRiskCarryPenalty, 0)
+        score.risk = score.risk - penalty
+        score.breakdown.reasons[#score.breakdown.reasons + 1] = "full_turn_move_risk_penalty"
+        score.breakdown.fullTurnMoveRisk = {
+            penalty = penalty,
+            basePenalty = num(tags.fullTurnMoveRiskPenalty, penalty),
+            reason = tags.fullTurnMoveRiskReason,
+            lethal = tags.fullTurnMoveRiskLethal == true,
+            suicidal = tags.fullTurnMoveRiskSuicidal == true
+        }
+    end
+
+    if isPipelineV2EarlyRuntime(ctx)
+        and ctx
+        and ctx.stats
+        and ctx.stats.pipelineV2EarlySkirmishActive == true
+        and not (tags and tags.earlySkirmish == true)
+        and candidateIsPassiveOnly(candidate, beforeState, ctx.aiPlayer) then
+        local penalty = num(ctx.cfg and ctx.cfg.PIPELINE_V2_EARLY_SKIRMISH_PASSIVE_PENALTY, 18000)
+        score.force = score.force - penalty
+        score.breakdown.reasons[#score.breakdown.reasons + 1] = "early_skirmish_passive_penalty"
+        score.breakdown.earlySkirmishPassivePenalty = {
+            penalty = penalty,
+            generated = num(ctx.stats.pipelineV2EarlySkirmishCandidates, 0),
+            legalAttackActions = num(ctx.stats.legalAttackActions, 0),
+            legalMoveAttackActions = num(ctx.stats.legalMoveAttackActions, 0)
+        }
+    end
+
     local hasDefenseProof = tags
         and (
             tags.preventsImmediateLoss == true

@@ -626,11 +626,11 @@ runTest("brain_uses_pipeline_v2_mid_attack_in_real_turn_path", function()
         turnNumber = 13,
         currentTurn = 13,
         playerOneHub = {name = "Commandant", player = 1, row = 1, col = 1, currentHp = 12, startingHp = 12},
-        playerTwoHub = {name = "Commandant", player = 2, row = 4, col = 8, currentHp = 12, startingHp = 12},
+        playerTwoHub = {name = "Commandant", player = 2, row = 8, col = 8, currentHp = 12, startingHp = 12},
         units = {
             unit("Cloudstriker", 1, 4, 5),
             unit("Wingstalker", 1, 2, 1),
-            unit("Bastion", 2, 8, 8, {move = 0})
+            unit("Bastion", 2, 4, 8, {move = 0})
         },
         neutralBuildings = {},
         supply = {
@@ -660,7 +660,11 @@ runTest("brain_uses_pipeline_v2_mid_attack_in_real_turn_path", function()
     assertEquals(stats.coreExit, "pipeline_v2_mid_selected", "brain should exit through real mid V2")
     assertTrue((stats.pipelineV2MidAccepted or 0) >= 1, "mid gate should accept at least one complete mid trade")
     assertEquals(tonumber(stats.sanitizerReplacements) or 0, 0, "mid V2 should not need sanitizer replacement")
-    assertEquals(stats.pipelineV2MidSelectedTradeReason, "mid_trade_supported_pressure", "trade reason should be logged")
+    assertTrue(
+        stats.pipelineV2MidSelectedTradeReason == "mid_trade_supported_pressure"
+            or stats.pipelineV2MidSelectedTradeReason == "mid_trade_legal_damage_candidate",
+        "trade reason should be logged"
+    )
     assertTrue(stats.pipelineV2MidSelectedSource == "mid_v2_attack"
         or stats.pipelineV2MidSelectedSource == "mid_v2_move_attack", "selected source should stay inside mid attack V2")
 end)

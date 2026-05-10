@@ -92,6 +92,26 @@ local function earlyBuildPositionContext(ctx)
         and ctx.earlyPlan.active == true
 end
 
+local function earlySkirmishActive(ctx)
+    return ctx
+        and ctx.phase
+        and ctx.phase.early == true
+        and ctx.stats
+        and ctx.stats.pipelineV2EarlySkirmishActive == true
+end
+
+local function candidateHasAttack(candidate)
+    if candidate and (candidate.hasFactionAttack == true or candidate.containsAttack == true) then
+        return true
+    end
+    for _, action in ipairs(candidate and candidate.actions or {}) do
+        if action and action.type == "attack" then
+            return true
+        end
+    end
+    return false
+end
+
 function M.opensOwnCommandantPressure(ai, beforeState, afterOur, candidate, ctx)
     if not (ai and beforeState and afterOur and candidate and ctx and ctx.aiPlayer and ctx.enemyPlayer) then
         return false
@@ -214,6 +234,12 @@ function M.check(ai, state, ctx, contracts, item, callbacks)
             applyCommandantPressurePenalty(ctx, item, pressureAnalysis)
             recordSoftenedCommandantPressure(ctx, candidate, pressureAnalysis)
         end
+    end
+
+    if earlySkirmishActive(ctx)
+        and not candidateHasAttack(candidate)
+        and not (candidate.tacticalTags and candidate.tacticalTags.earlySkirmish == true) then
+        return false, "does_not_answer_early_skirmish"
     end
 
     local strictGate = not (ctx and ctx.cfg and ctx.cfg.PIPELINE_V2_STRICT_CONTRACT_GATE == false)

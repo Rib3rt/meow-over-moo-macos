@@ -1,6 +1,7 @@
 local contractGate = require("ai_tournament.pipeline_v2_contract_gate")
 local earlyPositionMap = require("ai_tournament.early_position_map")
 local earlyPositionCandidates = require("ai_tournament.early_position_candidates")
+local earlySkirmishCandidates = require("ai_tournament.early_skirmish_candidates")
 local pipelineV2FullTurn = require("ai_tournament.pipeline_v2_full_turn")
 local actionExposureGuard = require("ai_tournament.action_exposure_guard")
 local budgetScope = require("ai_tournament.pipeline_v2_budget_scope")
@@ -381,8 +382,39 @@ function M.run(ai, state, ctx, contracts, callbacks)
     local finalistsExtraMs = clampLimit(ctx.cfg.PIPELINE_V2_FINALISTS_EXTRA_MS or 0, 0, 5000)
     local fullTurnExtraMs = clampLimit(ctx.cfg.PIPELINE_V2_FULL_TURN_EXTRA_MS or 0, 0, 5000)
 
+    ctx.beginStage("pipeline_v2_early_skirmish")
+    local skirmishCandidates, skirmishStats = earlySkirmishCandidates.generate(ai, state, ctx, {
+        directCap = ctx.cfg.PIPELINE_V2_EARLY_SKIRMISH_DIRECT_ATTACK_CAP or 8,
+        moveAttackScanCap = ctx.cfg.PIPELINE_V2_EARLY_SKIRMISH_MOVE_ATTACK_SCAN_CAP or 20,
+        moveAttackCap = ctx.cfg.PIPELINE_V2_EARLY_SKIRMISH_MOVE_ATTACK_CAP or 8
+    })
+    ctx.endStage("pipeline_v2_early_skirmish")
+    stats.pipelineV2EarlySkirmishCandidates = #(skirmishCandidates or {})
+    stats.pipelineV2EarlySkirmishActive = #(skirmishCandidates or {}) > 0
+    stats.pipelineV2EarlySkirmishSkippedReason = skirmishStats and skirmishStats.skippedReason or nil
+    stats.pipelineV2EarlySkirmishLegalDirect = num(skirmishStats and skirmishStats.legalDirect, 0)
+    stats.pipelineV2EarlySkirmishLegalMoves = num(skirmishStats and skirmishStats.legalMoves, 0)
+    stats.pipelineV2EarlySkirmishMoveScanned = num(skirmishStats and skirmishStats.moveScanned, 0)
+    stats.pipelineV2EarlySkirmishDirectGenerated = num(skirmishStats and skirmishStats.directGenerated, 0)
+    stats.pipelineV2EarlySkirmishMoveAttackGenerated = num(skirmishStats and skirmishStats.moveAttackGenerated, 0)
+    stats.pipelineV2EarlySkirmishSafetyRejected = num(skirmishStats and skirmishStats.safetyRejected, 0)
+    stats.pipelineV2EarlySkirmishHealerAttackCandidates =
+        num(skirmishStats and skirmishStats.healerAttackCandidates, 0)
+    stats.pipelineV2EarlySkirmishHealerAttackRejected =
+        num(skirmishStats and skirmishStats.healerAttackRejectedByDoctrine, 0)
+    stats.pipelineV2EarlySkirmishHealerAttackFallbackUsed =
+        skirmishStats and skirmishStats.healerAttackFallbackUsed == true or false
+    stats.pipelineV2EarlySkirmishSafetyRejectedReasons =
+        skirmishStats and skirmishStats.safetyRejectedReasons or nil
+    stats.combatDirectGenerated =
+        num(stats.combatDirectGenerated, 0) + num(skirmishStats and skirmishStats.directGenerated, 0)
+    stats.combatGeneratedTotal = num(stats.combatGeneratedTotal, 0) + #(skirmishCandidates or {})
+
     ctx.beginStage("pipeline_v2_enumeration")
     local candidates = {}
+    for _, candidate in ipairs(skirmishCandidates or {}) do
+        candidates[#candidates + 1] = candidate
+    end
     for _, candidate in ipairs(deployFirstCandidates or {}) do
         candidates[#candidates + 1] = candidate
     end

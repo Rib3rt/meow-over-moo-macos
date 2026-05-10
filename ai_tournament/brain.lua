@@ -13,6 +13,7 @@ local earlyPlanner = require("ai_tournament.early_planner")
 local debugModule = require("ai_tournament.debug")
 local pipelineV2 = require("ai_tournament.pipeline_v2")
 local defenseScope = require("ai_tournament.defense_pressure_scope")
+local budgetScope = require("ai_tournament.pipeline_v2_budget_scope")
 
 local M = {}
 
@@ -104,6 +105,71 @@ local function cfgTable(ctx, key)
         return value
     end
     return {}
+end
+
+local HARD_STAGE_BUDGET_STATS = {
+    immediate_win = {
+        extraKey = "hardImmediateWinExtraMs",
+        remainingKey = "hardImmediateWinRemainingBeforeMs",
+        startKey = "hardImmediateWinStartElapsedMs",
+        extendedKey = "hardImmediateWinExtendedHardBudgetMs",
+        localWindowKey = "hardImmediateWinLocalWindowMs"
+    },
+    hard_win = {
+        extraKey = "hardWinExtraMs",
+        remainingKey = "hardWinRemainingBeforeMs",
+        startKey = "hardWinStartElapsedMs",
+        extendedKey = "hardWinExtendedHardBudgetMs",
+        localWindowKey = "hardWinLocalWindowMs"
+    },
+    hard_punish = {
+        extraKey = "hardPunishExtraMs",
+        remainingKey = "hardPunishRemainingBeforeMs",
+        startKey = "hardPunishStartElapsedMs",
+        extendedKey = "hardPunishExtendedHardBudgetMs",
+        localWindowKey = "hardPunishLocalWindowMs"
+    },
+    hard_defense_lane = {
+        extraKey = "hardDefenseExtraMs",
+        remainingKey = "hardDefenseRemainingBeforeMs",
+        startKey = "hardDefenseStartElapsedMs",
+        extendedKey = "hardDefenseExtendedHardBudgetMs",
+        localWindowKey = "hardDefenseLocalWindowMs"
+    }
+}
+
+local function hardStageExtraMs(ctx, specificKey)
+    local cfg = ctx and ctx.cfg or {}
+    local specific = tonumber(cfg[specificKey])
+    if specific ~= nil then
+        return math.max(0, specific)
+    end
+    return math.max(0, num(cfg.HARD_STAGE_EXTRA_MS, 1000))
+end
+
+local function pushHardStageBudget(ctx, stageName, specificKey)
+    local keys = HARD_STAGE_BUDGET_STATS[stageName] or {}
+    return budgetScope.push(ctx, ctx and ctx.stats or nil, {
+        extraMs = hardStageExtraMs(ctx, specificKey),
+        additive = true,
+        extraKey = keys.extraKey,
+        remainingKey = keys.remainingKey,
+        startKey = keys.startKey,
+        extendedKey = keys.extendedKey,
+        localWindowKey = keys.localWindowKey
+    })
+end
+
+local function withHardStageBudget(ctx, stageName, specificKey, fn)
+    local budget = pushHardStageBudget(ctx, stageName, specificKey)
+    local ok, a, b, c, d, e, f = xpcall(fn, debug.traceback)
+    if budget and budget.pop then
+        budget.pop()
+    end
+    if not ok then
+        error(a, 0)
+    end
+    return a, b, c, d, e, f
 end
 
 local function isEarlySlowSiegeDeploy(ctx, action)
@@ -4291,6 +4357,7 @@ local function buildDefenseLane(ai, state, ctx, baseThreat)
 
     local laneCandidates = {}
     local filterMeta = nil
+    local emergencyCandidate = nil
     if baseThreat and baseThreat.immediateLethal == true then
         local safe
         safe, filterMeta = ctx.tacticalGate.filterForcedResponses(ai, state, candidates, baseThreat, ctx)
@@ -4300,6 +4367,7 @@ local function buildDefenseLane(ai, state, ctx, baseThreat)
         end
         local emergency = buildEmergencyDefenseCandidate(ai, state, ctx, baseThreat)
         if emergency then
+            emergencyCandidate = emergency
             laneCandidates = prependUniqueCandidate(laneCandidates, emergency)
             filterMeta = filterMeta or {}
             filterMeta.emergencyDefenseCandidate = true
@@ -4336,6 +4404,7 @@ local function buildDefenseLane(ai, state, ctx, baseThreat)
         appendUniqueBucket(candidate, "anti_lethal")
         lane.candidates[#lane.candidates + 1] = candidate
     end
+    lane.emergencyCandidate = emergencyCandidate
 
     if ctx.stats then
         ctx.stats.forcedFiltered = true
@@ -5213,6 +5282,9 @@ function M._materializeHardPunishSelection(ai, state, ctx, contracts, punish)
 
     local isSafePressure = punish.kind == "ranged_commandant_pressure"
         or punish.kind == "move_ranged_commandant_pressure"
+    local hardPunishContract = punish.defensePressureResolved == true
+        and CONTRACTS.DEFEND_NOW
+        or CONTRACTS.COMBAT_OR_DRAW_RESET
 
     local tacticalTags = {
         hardPunish = true,
@@ -5220,7 +5292,9 @@ function M._materializeHardPunishSelection(ai, state, ctx, contracts, punish)
         hardPunishProof = punish.proof,
         hardPunishTargetName = punish.targetName,
         safeKill = not isSafePressure,
-        safeCommandantPressure = isSafePressure
+        safeCommandantPressure = isSafePressure,
+        defendNowSafeKill = punish.defensePressureResolved == true,
+        targetsCommandantThreat = punish.defensePressureResolved == true
     }
 
     local candidate = nil
@@ -5230,7 +5304,7 @@ function M._materializeHardPunishSelection(ai, state, ctx, contracts, punish)
             source = source,
             buckets = buckets,
             tacticalTags = tacticalTags,
-            contract = CONTRACTS.COMBAT_OR_DRAW_RESET,
+            contract = hardPunishContract,
             avoidUnsafeFiller = ctx and ctx.cfg and ctx.cfg.HARD_PREFIX_AVOID_UNSAFE_FILLER ~= false
         })
     else
@@ -5241,7 +5315,7 @@ function M._materializeHardPunishSelection(ai, state, ctx, contracts, punish)
                 source = source,
                 buckets = buckets,
                 tacticalTags = tacticalTags,
-                contract = CONTRACTS.COMBAT_OR_DRAW_RESET
+                contract = hardPunishContract
             })
         end
     end
@@ -5267,7 +5341,7 @@ function M._materializeHardPunishSelection(ai, state, ctx, contracts, punish)
         source = source,
         buckets = buckets,
         tacticalTags = tacticalTags,
-        contract = CONTRACTS.COMBAT_OR_DRAW_RESET
+        contract = hardPunishContract
     })
     candidate.sanitizerOk = true
     candidate = annotateCandidateDiagnostics(ctx.evaluator, state, candidate, ctx.aiPlayer)
@@ -5517,6 +5591,53 @@ chooseBestSanitizedSelection = function(ai, state, ctx, primary, alternatives)
     end
 
 	return nil, lastSummary
+end
+
+local function selectEmergencyDefenseFallback(ai, state, ctx, contracts, baseThreat, candidate)
+    if not (contracts and contracts.defenseActive == true and contracts.defenseKind ~= "pressure") then
+        return nil, nil, "not_hard_defense"
+    end
+    if not (baseThreat and baseThreat.immediateLethal == true) then
+        return nil, nil, "not_immediate_lethal"
+    end
+
+    local emergency = candidate or buildEmergencyDefenseCandidate(ai, state, ctx, baseThreat)
+    if not emergency then
+        return nil, nil, "no_emergency_defense_candidate"
+    end
+
+    if ctx and ctx.stats then
+        ctx.stats.emergencyDefenseFallbackAttempted = true
+        ctx.stats.emergencyDefenseFallbackSignature = emergency.signature
+    end
+
+    local ranked = rankCandidatePool(ai, state, ctx, {emergency}, {
+        laneName = "emergency_defense_fallback",
+        requiredLane = true,
+        minimumRanked = 1,
+        maxRanked = 1,
+        ignoreBudget = true,
+        trackBestSoFar = false
+    })
+    if ctx and ctx.stats then
+        ctx.stats.emergencyDefenseFallbackRanked = #(ranked or {})
+    end
+
+    local lastSummary = nil
+    for _, item in ipairs(ranked or {}) do
+        local sanitized, summary = chooseBestSanitizedSelection(ai, state, ctx, item, {item})
+        lastSummary = summary or lastSummary
+        if sanitized and M.hardLockReasonForSelection(ai, state, ctx, contracts, sanitized) == "defend_now" then
+            if ctx and ctx.stats then
+                ctx.stats.emergencyDefenseFallbackSelected = true
+                ctx.stats.emergencyDefenseFallbackSelectedSignature =
+                    sanitized.candidate and sanitized.candidate.signature or nil
+            end
+            return sanitized, lastSummary, nil
+        end
+    end
+
+    return nil, lastSummary, "emergency_defense_fallback_rejected"
 end
 
 local function enforcePassiveOverrideProof(
@@ -6464,19 +6585,26 @@ function M.chooseTurn(ai, state, opts)
         return countLegalMoveAttackFactionAttacks(ai, state, ctx.aiPlayer, ctx)
     end)
 
-    ctx.beginStage("immediate_win")
-    local immediateWin = ctx.tacticalGate.findImmediateWin(ai, state, ctx)
-    ctx.endStage("immediate_win")
+    local immediateWin = nil
+    local sanitizedImmediate = nil
+    local immediateWinSanitizeSummary = nil
+    withHardStageBudget(ctx, "immediate_win", "HARD_IMMEDIATE_WIN_EXTRA_MS", function()
+        ctx.beginStage("immediate_win")
+        immediateWin = ctx.tacticalGate.findImmediateWin(ai, state, ctx)
+        if immediateWin and immediateWin.candidate then
+            immediateWin.candidate = annotateCandidateDiagnostics(ctx.evaluator, state, immediateWin.candidate, ctx.aiPlayer)
+            sanitizedImmediate, immediateWinSanitizeSummary = sanitizeTournamentSequenceForContext(
+                ai,
+                state,
+                immediateWin.candidate.actions,
+                ctx,
+                {requireExact = true}
+            )
+        end
+        ctx.endStage("immediate_win")
+    end)
 
     if immediateWin and immediateWin.candidate then
-        immediateWin.candidate = annotateCandidateDiagnostics(ctx.evaluator, state, immediateWin.candidate, ctx.aiPlayer)
-        local sanitizedImmediate, sanitizeSummary = sanitizeTournamentSequenceForContext(
-            ai,
-            state,
-            immediateWin.candidate.actions,
-            ctx,
-            {requireExact = true}
-        )
         if sanitizedImmediate and #sanitizedImmediate > 0 then
             immediateWin.candidate.actions = sanitizedImmediate
             immediateWin.candidate.signature = ctx.turnEnumerator.sequenceSignature(sanitizedImmediate)
@@ -6508,16 +6636,27 @@ function M.chooseTurn(ai, state, opts)
         ctx.stats.hardSelectionRejectStage = "tournament_sanitizer"
         ctx.stats.hardSelectionRejectSignature = immediateWin.candidate.signature
         ctx.stats.hardSelectionRejectSanitizerReplacements =
-            num(sanitizeSummary and sanitizeSummary.replacements, 0)
+            num(immediateWinSanitizeSummary and immediateWinSanitizeSummary.replacements, 0)
         ctx.stats.hardSelectionRejectSanitizerReasonCounts =
-            copyMap(sanitizeSummary and sanitizeSummary.reasonCounts or {})
-        ctx.stats.immediateWinSanitizerReplacements = num(sanitizeSummary and sanitizeSummary.replacements, 0)
+            copyMap(immediateWinSanitizeSummary and immediateWinSanitizeSummary.reasonCounts or {})
+        ctx.stats.immediateWinSanitizerReplacements =
+            num(immediateWinSanitizeSummary and immediateWinSanitizeSummary.replacements, 0)
     end
 
-    local hardWinSelection = require("ai_tournament.hard_win").select(ai, state, ctx)
+    local hardWinSelection = nil
+    local hardWinItem = nil
+    local hardWinSanitizeSummary = nil
+    local hardWinRejectReason = nil
+    withHardStageBudget(ctx, "hard_win", "HARD_WIN_EXTRA_MS", function()
+        ctx.beginStage("hard_win")
+        hardWinSelection = require("ai_tournament.hard_win").select(ai, state, ctx)
+        if hardWinSelection then
+            hardWinItem, hardWinSanitizeSummary, hardWinRejectReason =
+                M._materializeHardWinSelection(ai, state, ctx, hardWinSelection)
+        end
+        ctx.endStage("hard_win")
+    end)
     if hardWinSelection then
-        local hardWinItem, hardWinSanitizeSummary, hardWinRejectReason =
-            M._materializeHardWinSelection(ai, state, ctx, hardWinSelection)
         if hardWinItem and hardWinItem.candidate and hardWinItem.candidate.actions then
             meta.reason = hardWinSelection.reason or "hard_win_priority00"
             meta.selected = hardWinItem
@@ -6605,15 +6744,28 @@ function M.chooseTurn(ai, state, opts)
     ctx.stats.kernelReason = nil
     ctx.stats.kernelSource = nil
 
-    local hardPunishSelection = require("ai_tournament.hard_punish").select(ai, state, ctx, contracts)
+    local hardPunishSelection = nil
+    local hardPunishItem = nil
+    local hardPunishSanitizeSummary = nil
+    local hardPunishRejectReason = nil
+    withHardStageBudget(ctx, "hard_punish", "HARD_PUNISH_EXTRA_MS", function()
+        ctx.beginStage("hard_punish")
+        hardPunishSelection = require("ai_tournament.hard_punish").select(ai, state, ctx, contracts)
+        if hardPunishSelection then
+            hardPunishItem, hardPunishSanitizeSummary, hardPunishRejectReason =
+                M._materializeHardPunishSelection(ai, state, ctx, contracts, hardPunishSelection)
+        end
+        ctx.endStage("hard_punish")
+    end)
     if hardPunishSelection then
-        local hardPunishItem, hardPunishSanitizeSummary, hardPunishRejectReason =
-            M._materializeHardPunishSelection(ai, state, ctx, contracts, hardPunishSelection)
         if hardPunishItem and hardPunishItem.candidate and hardPunishItem.candidate.actions then
             local hardReason = (hardPunishSelection.kind == "ranged_commandant_pressure"
                 or hardPunishSelection.kind == "move_ranged_commandant_pressure")
                 and "safe_commandant_pressure"
                 or "safe_kill"
+            if hardPunishSelection.defensePressureResolved == true then
+                hardReason = "defend_now_safe_kill"
+            end
             meta.reason = hardPunishSelection.reason or "hard_punish_safe_kill"
             meta.selected = hardPunishItem
             ctx.stats.coreExit = "hard_punish"
@@ -6655,33 +6807,50 @@ function M.chooseTurn(ai, state, opts)
     if defenseScope.isHardDefense(contracts) then
         ctx.stats.pipelineV2Skipped = true
         ctx.stats.pipelineV2FailedReason = "hard_defense_contract"
-        ctx.beginStage("hard_defense_lane")
-        local defenseLane = buildDefenseLane(ai, state, ctx, baseThreat)
+        local defenseLane = nil
         local rankedDefense = {}
-        if defenseLane and #(defenseLane.candidates or {}) > 0 then
-            rankedDefense = rankCandidatePool(ai, state, ctx, defenseLane.candidates, {
-                laneName = defenseLane.name,
-                requiredLane = true,
-                minimumRanked = defenseLane.minimumRanked,
-                maxRanked = clampLimit(ctx.cfg.CONTRACT_REQUIRED_LANE_RANK_CAP or 10, 1, 24),
-                allowSoftStop = false,
-                stopAfterMinimum = false
-            })
-        end
-        ctx.endStage("hard_defense_lane")
-        ctx.stats.hardDefenseCandidates = defenseLane and #(defenseLane.candidates or {}) or 0
-        ctx.stats.hardDefenseRanked = #rankedDefense
-
         local selectedDefense = nil
         local defenseSanitizeSummary = nil
-        for _, item in ipairs(rankedDefense or {}) do
-            local sanitized, summary = chooseBestSanitizedSelection(ai, state, ctx, item, {item})
-            defenseSanitizeSummary = summary or defenseSanitizeSummary
-            if sanitized and M.hardLockReasonForSelection(ai, state, ctx, contracts, sanitized) == "defend_now" then
-                selectedDefense = sanitized
-                break
+        local emergencyDefenseRejectReason = nil
+
+        withHardStageBudget(ctx, "hard_defense_lane", "HARD_DEFENSE_EXTRA_MS", function()
+            ctx.beginStage("hard_defense_lane")
+            defenseLane = buildDefenseLane(ai, state, ctx, baseThreat)
+            if defenseLane and #(defenseLane.candidates or {}) > 0 then
+                rankedDefense = rankCandidatePool(ai, state, ctx, defenseLane.candidates, {
+                    laneName = defenseLane.name,
+                    requiredLane = true,
+                    minimumRanked = defenseLane.minimumRanked,
+                    maxRanked = clampLimit(ctx.cfg.CONTRACT_REQUIRED_LANE_RANK_CAP or 10, 1, 24),
+                    allowSoftStop = false,
+                    stopAfterMinimum = false
+                })
             end
-        end
+
+            for _, item in ipairs(rankedDefense or {}) do
+                local sanitized, summary = chooseBestSanitizedSelection(ai, state, ctx, item, {item})
+                defenseSanitizeSummary = summary or defenseSanitizeSummary
+                if sanitized and M.hardLockReasonForSelection(ai, state, ctx, contracts, sanitized) == "defend_now" then
+                    selectedDefense = sanitized
+                    break
+                end
+            end
+
+            if not selectedDefense then
+                selectedDefense, defenseSanitizeSummary, emergencyDefenseRejectReason =
+                    selectEmergencyDefenseFallback(
+                        ai,
+                        state,
+                        ctx,
+                        contracts,
+                        baseThreat,
+                        defenseLane and defenseLane.emergencyCandidate or nil
+                    )
+            end
+            ctx.endStage("hard_defense_lane")
+        end)
+        ctx.stats.hardDefenseCandidates = defenseLane and #(defenseLane.candidates or {}) or 0
+        ctx.stats.hardDefenseRanked = #rankedDefense
 
         if selectedDefense and selectedDefense.candidate and selectedDefense.candidate.actions then
             meta.reason = "hard_defense_contract"
@@ -6712,7 +6881,7 @@ function M.chooseTurn(ai, state, opts)
             return selectedDefense.candidate.actions, meta
         end
 
-        ctx.stats.hardDefenseRejected = "no_sanitized_defense_candidate"
+        ctx.stats.hardDefenseRejected = emergencyDefenseRejectReason or "no_sanitized_defense_candidate"
         ctx.stats.hardDefenseRejectedSanitizerReplacements =
             num(defenseSanitizeSummary and defenseSanitizeSummary.replacements, 0)
         ctx.stats.hardDefenseRejectedSanitizerReasonCounts =
