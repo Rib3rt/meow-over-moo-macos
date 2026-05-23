@@ -122,6 +122,10 @@ Tick if shipped enabled:
 
 - Steam Cloud
 
+Before ticking Steam Cloud on the store page, confirm `Cloud support for developers only` is unchecked in `Steamworks > Steam Cloud`.
+
+Before resubmission, confirm the Content Survey AI section matches the provenance of the store page visuals and achievement icons.
+
 ## Achievement List
 
 ### Display names

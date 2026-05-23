@@ -113,6 +113,7 @@ Recommended:
 Cloud setup:
 
 - [ ] Enable Steam Cloud
+- [ ] Confirm `Cloud support for developers only` is unchecked
 - [ ] Add the Auto-Cloud roots below
 - [ ] Save
 - [ ] Publish

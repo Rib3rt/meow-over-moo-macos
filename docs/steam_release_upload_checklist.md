@@ -34,6 +34,8 @@ Status: Completed for the current market release baseline, including Scenario Mo
 - [x] Required store metadata finalized.
 - [x] Required capsules and library assets uploaded.
 - [x] Required screenshots/trailer readiness confirmed.
+- [ ] Steam Cloud store feature matches public Cloud availability; `Cloud support for developers only` is unchecked.
+- [ ] Content Survey AI disclosure matches store assets and achievement icon provenance.
 
 ## 7. Depot upload
 - [x] Correct content root and branch/depot mapping validated.
