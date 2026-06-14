@@ -70,8 +70,8 @@ local function refreshDerivedAssignmentState()
     GAME.CURRENT.TURN_ORDER = Factions.getTurnOrder()
 end
 
-VERSION = "1.0.0.1"
-PLATFORM_BUILD_LABEL = "Windows Edition"
+VERSION = "1.1.0"
+PLATFORM_BUILD_LABEL = "macOS Edition"
 SETTINGS = {
     DISPLAY = {
         BORDERLESS = false,
@@ -123,8 +123,8 @@ SETTINGS = {
         ENABLE_PROFILING = false,
         OVERLAY_ENABLED = false,
         CAPTURE_ENABLED = false,
-        CAPTURE_PATH = "docs/perf_last_session.csv",
-        SUMMARY_PATH = "docs/perf_last_session_summary.txt",
+        CAPTURE_PATH = "_diagnostics/perf_last_session.csv",
+        SUMMARY_PATH = "_diagnostics/perf_last_session_summary.txt",
         HITCH_THRESHOLD_MS = 33.0,
         DEBUG_CONSOLE_LOG_ENABLED = false,
         LOG_LEVEL = "error",

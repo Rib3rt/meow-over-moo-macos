@@ -453,8 +453,8 @@ function perfMetrics.exportSessionReport()
         return nil
     end
 
-    local csvPath = tostring(config.CAPTURE_PATH or "docs/perf_last_session.csv")
-    local summaryPath = tostring(config.SUMMARY_PATH or "docs/perf_last_session_summary.txt")
+    local csvPath = tostring(config.CAPTURE_PATH or "_diagnostics/perf_last_session.csv")
+    local summaryPath = tostring(config.SUMMARY_PATH or "_diagnostics/perf_last_session_summary.txt")
     local endedDate = os.date("%Y-%m-%d %H:%M:%S")
     local snapshot = perfMetrics.getSnapshot()
     local frames = captureFrames or {}

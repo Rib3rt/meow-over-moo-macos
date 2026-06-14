@@ -20,7 +20,7 @@ APP_BUNDLE_NAME = "MOM.app"
 DEFAULT_BUNDLE_ID = "com.meowovermoo.game"
 MIN_MACOS_VERSION = "13.0"
 PIN_MANIFEST_NAME = "macos_love_pin.json"
-TEST_STEAM_APP_ID = "480"
+TEST_STEAM_APP_ID = "1573941"
 CUSTOM_ICON_FILE_NAME = "OS X AppIcon.icns"
 RUNTIME_LIB_DIR_NAME = "runtime_libs"
 
@@ -485,7 +485,7 @@ def build_upload_instructions(keep_steam_appid: bool) -> str:
         5. {steam_appid_note}
 
         Steam Cloud Auto-Cloud setup for cross-platform scenario stats:
-        - Use root WinAppDataRoaming, subdirectory LOVE/MeowOverMoo, OS All OSes.
+        - Use root WinAppDataRoaming, subdirectory MeowOverMoo, OS All OSes.
         - Add file patterns OnlineRatingProfile.dat and ScenarioProgress.dat.
         - Add Root Override for macOS: New root MacAppSupport, Replace path LOVE/MeowOverMoo.
         - Add Root Override for Linux: New root LinuxXdgDataHome, Replace path love/MeowOverMoo.
@@ -498,27 +498,27 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a native macOS Apple Silicon package.")
     parser.add_argument(
         "--source-project",
-        default="/Users/mdc/Documents/New project/MeowOverMoo_MacNative",
+        default="/Users/mdc/Documents/meow-over-moo-macos",
         help="Source project folder.",
     )
     parser.add_argument(
         "--mac-runtime-dir",
-        default="/Users/mdc/Documents/New project/MeowOverMoo_MacNative/LOVE_GITHUB_MACOS_ARM64_RUNTIME_DROP",
+        default="/Users/mdc/Documents/meow-over-moo-macos/LOVE_GITHUB_MACOS_ARM64_RUNTIME_DROP",
         help="Folder containing the pinned official LOVE Apple Silicon .app runtime.",
     )
     parser.add_argument(
         "--love-source-dir",
-        default="/Users/mdc/Documents/New project/MeowOverMoo_MacNative/LOVE_GITHUB_MACOS_ARM64_SOURCE_DROP",
+        default="/Users/mdc/Documents/meow-over-moo-macos/LOVE_GITHUB_MACOS_ARM64_SOURCE_DROP",
         help="Folder containing the pinned matching LOVE source checkout.",
     )
     parser.add_argument(
         "--output-parent",
-        default="/Users/mdc/Documents/New project",
+        default="/Users/mdc/Documents",
         help="Parent folder where the macOS package folder will be created.",
     )
     parser.add_argument(
         "--custom-icon-dir",
-        default="/Users/mdc/Documents/New project/MeowOverMoo_MacNative/MACOS_APP_ICON_DROP",
+        default="/Users/mdc/Documents/meow-over-moo-macos/MACOS_APP_ICON_DROP",
         help="Folder containing an optional custom .icns file for MOM.app.",
     )
     parser.add_argument(
