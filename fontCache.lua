@@ -1,5 +1,7 @@
 local fontCache = {}
 
+local renderingQuality = require("rendering_quality")
+
 local cache = {}
 local DEFAULT_KEY = "__default__"
 
@@ -10,15 +12,12 @@ end
 function fontCache.get(path, size)
     assert(type(size) == "number", "fontCache.get requires a numeric size")
 
-    local key = buildKey(path, size)
+    local resolvedPath = renderingQuality.fontCachePath(path)
+    local key = buildKey(resolvedPath, size)
     local font = cache[key]
 
     if not font then
-        if path then
-            font = love.graphics.newFont(path, size)
-        else
-            font = love.graphics.newFont(size)
-        end
+        font = renderingQuality.newFont(resolvedPath, size)
         cache[key] = font
     end
 

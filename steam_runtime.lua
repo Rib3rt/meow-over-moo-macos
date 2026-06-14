@@ -63,25 +63,6 @@ local function normalizePath(path)
     return path:gsub("\\", "/")
 end
 
-local function detectRuntimePlatform()
-    if love and love.system and type(love.system.getOS) == "function" then
-        local okOs, osName = pcall(love.system.getOS)
-        if okOs and type(osName) == "string" and osName ~= "" then
-            if osName == "OS X" or osName == "macOS" then
-                return "macOS"
-            end
-            return osName
-        end
-    end
-
-    local pathSep = package and package.config and package.config:sub(1, 1) or "/"
-    if pathSep == "\\" then
-        return "Windows"
-    end
-
-    return "Linux"
-end
-
 local function joinPath(base, leaf)
     base = normalizePath(base)
     if not base then
@@ -152,7 +133,7 @@ local function resolveSourceRoot()
     return normalizePath(".")
 end
 
-local function collectLocalSteamAppIdOverrideCandidates()
+local function hasLocalSteamAppIdOverrideFile()
     local info = getFilesystemPathInfo()
     local candidates = {}
     local seen = {}
@@ -168,47 +149,18 @@ local function collectLocalSteamAppIdOverrideCandidates()
 
     if info.sourceBaseDir then
         add(joinPath(info.sourceBaseDir, "steam_appid.txt"))
-        if info.sourceBaseDir:match("/Contents/MacOS/?$") then
-            local resourceDir = info.sourceBaseDir:gsub("/Contents/MacOS/?$", "/Contents/Resources")
-            add(joinPath(resourceDir, "steam_appid.txt"))
-        end
     end
     if info.workingDir then
         add(joinPath(info.workingDir, "steam_appid.txt"))
-        if info.workingDir:match("/Contents/MacOS/?$") then
-            local resourceDir = info.workingDir:gsub("/Contents/MacOS/?$", "/Contents/Resources")
-            add(joinPath(resourceDir, "steam_appid.txt"))
-        end
     end
 
     for _, candidate in ipairs(candidates) do
         if fileExists(candidate) then
-            return candidates
+            return true
         end
     end
 
-    return candidates
-end
-
-local function readLocalSteamAppIdOverride()
-    local candidates = collectLocalSteamAppIdOverrideCandidates()
-    for _, candidate in ipairs(candidates) do
-        if fileExists(candidate) then
-            local file = io.open(candidate, "rb")
-            if file then
-                local content = file:read("*a")
-                file:close()
-                if type(content) == "string" then
-                    local trimmed = content:gsub("[%s\r\n]+", "")
-                    if trimmed ~= "" then
-                        return trimmed
-                    end
-                end
-            end
-        end
-    end
-
-    return nil
+    return false
 end
 
 local function collectErrorLogPaths()
@@ -330,13 +282,9 @@ end
 local function buildNativeLoadHint(errorText)
     local text = tostring(errorText or "")
     local lower = text:lower()
-    local platform = detectRuntimePlatform()
 
     if lower:find("procedure_not_found", 1, true) or lower:find("specified procedure could not be found", 1, true) then
-        if platform == "Windows" then
-            return "Native module loaded but symbol resolution failed. Rebuild bridge against the Windows LOVE 11.5 lua51.dll ABI."
-        end
-        return "Native module loaded but symbol resolution failed. Rebuild bridge against the matching LOVE Lua ABI for this platform."
+        return "Native module loaded but symbol resolution failed. Rebuild bridge against LOVE 11.5 lua51.dll ABI."
     end
 
     if lower:find("module_not_found", 1, true) then
@@ -344,13 +292,7 @@ local function buildNativeLoadHint(errorText)
     end
 
     if lower:find("dependency_missing", 1, true) or lower:find("specified module could not be found", 1, true) then
-        if platform == "Windows" then
-            return "A dependent DLL is missing. Verify steam_api64.dll beside steam_bridge_native.dll and run from x64 LOVE."
-        end
-        if platform == "macOS" then
-            return "A dependent native library is missing. Verify libsteam_api.dylib beside steam_bridge_native.so and run from the Apple Silicon LOVE app bundle."
-        end
-        return "A dependent shared library is missing. Verify libsteam_api.so beside steam_bridge_native.so and run from the matching Linux LOVE runtime."
+        return "A dependent DLL is missing. Verify steam_api64.dll beside steam_bridge_native.dll and run from x64 LOVE."
     end
 
     if lower:find("steam_api_init_failed", 1, true) then
@@ -401,8 +343,8 @@ local function loadBridge(moduleName)
 end
 
 local function buildInitOptions(config)
-    local localAppIdOverride = readLocalSteamAppIdOverride()
-    local appIdForNative = localAppIdOverride or ""
+    local useLocalAppIdOverride = hasLocalSteamAppIdOverrideFile()
+    local appIdForNative = useLocalAppIdOverride and config.APP_ID or ""
     return {
         appId = appIdForNative,
         autoRestartAppIfNeeded = config.AUTO_RESTART_APP_IF_NEEDED == true and appIdForNative ~= "",

@@ -437,7 +437,34 @@ local function buildSummaryText(snapshot, frameCountValue, endedDate)
     return table.concat(lines, "\n") .. "\n"
 end
 
+local function shellQuote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function windowsQuote(value)
+    return '"' .. tostring(value):gsub('"', '""') .. '"'
+end
+
+local function ensureParentDirectory(path)
+    local directory = tostring(path or ""):match("^(.*)[/\\][^/\\]+$")
+    if not directory or directory == "" or directory == "." then
+        return true
+    end
+
+    local separator = package and package.config and package.config:sub(1, 1) or "/"
+    local command
+    if separator == "\\" then
+        command = "mkdir " .. windowsQuote(directory) .. " >nul 2>nul"
+    else
+        command = "mkdir -p " .. shellQuote(directory)
+    end
+
+    local ok = os.execute(command)
+    return ok == true or ok == 0
+end
+
 local function writeFile(path, content)
+    ensureParentDirectory(path)
     local file, err = io.open(path, "w")
     if not file then
         return false, err

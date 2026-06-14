@@ -18,6 +18,7 @@ local steamRuntime = require("steam_runtime")
 local ConfirmDialog = require("confirmDialog")
 local inputBackend = require("input_backend")
 local audioRuntime = require("audio_runtime")
+local renderingQuality = require("rendering_quality")
 
 local currentState = nil
 local currentStateName = nil
@@ -65,6 +66,11 @@ local transientSuppressedInputs = {}
 local latchedOneShotInputs = {}
 local activeTouches = {}
 local primaryTouchId = nil
+local pointerPressTransitionBlockActive = false
+local pointerPressTransitionButton = nil
+local touchMousePressBlock = nil
+local touchMouseReleaseBlock = nil
+local suppressedTouchReleaseIds = {}
 local remotePlayDirectInputActive = false
 local remotePlayMouse = {x = 0, y = 0}
 local remotePlayDirectInputLastError = nil
@@ -97,6 +103,28 @@ local REPEATABLE_ACTIONS = {
 
 local function isRepeatableAction(actionId)
     return REPEATABLE_ACTIONS[tostring(actionId or "")] == true
+end
+
+local function isKeyboardDown(key)
+    return love and love.keyboard and love.keyboard.isDown and love.keyboard.isDown(key) == true
+end
+
+local function isDesktopDisplayModeShortcut(key)
+    if key == "f11" then
+        return true
+    end
+
+    if key == "return" or key == "kpenter" then
+        return isKeyboardDown("lalt") or isKeyboardDown("ralt")
+    end
+
+    if key == "f" then
+        local commandDown = isKeyboardDown("lgui") or isKeyboardDown("rgui")
+        local controlDown = isKeyboardDown("lctrl") or isKeyboardDown("rctrl")
+        return commandDown and controlDown
+    end
+
+    return false
 end
 
 local function getDeviceInputTable(root, deviceKey)
@@ -219,6 +247,67 @@ end
 local function touchDeltaToScreen(dx, dy)
     local windowWidth, windowHeight = love.graphics.getDimensions()
     return dx * windowWidth, dy * windowHeight
+end
+
+local function beginPointerPressTransitionBlock(button)
+    pointerPressTransitionBlockActive = true
+    pointerPressTransitionButton = button
+end
+
+local function shouldBlockPointerPress(button)
+    if not pointerPressTransitionBlockActive then
+        return false
+    end
+    return pointerPressTransitionButton == nil or button == nil or pointerPressTransitionButton == button
+end
+
+local function clearPointerPressTransitionBlock()
+    pointerPressTransitionBlockActive = false
+    pointerPressTransitionButton = nil
+end
+
+local function beginTouchMousePressBlock(id, button)
+    touchMousePressBlock = {
+        id = id,
+        button = button
+    }
+end
+
+local function shouldBlockTouchMousePress(button, istouch, sourceOverride)
+    if not touchMousePressBlock or istouch ~= true or sourceOverride ~= nil then
+        return false
+    end
+    return touchMousePressBlock.button == nil or button == nil or touchMousePressBlock.button == button
+end
+
+local function beginTouchMouseReleaseBlock(id, button)
+    touchMouseReleaseBlock = {
+        id = id,
+        button = button
+    }
+end
+
+local function shouldBlockTouchMouseRelease(button, istouch, sourceOverride)
+    if not touchMouseReleaseBlock or istouch ~= true or sourceOverride ~= nil then
+        return false
+    end
+    if touchMouseReleaseBlock.button ~= nil and button ~= nil and touchMouseReleaseBlock.button ~= button then
+        return false
+    end
+    touchMouseReleaseBlock = nil
+    return true
+end
+
+local function clearTouchMousePressBlock(id)
+    if touchMousePressBlock and (id == nil or touchMousePressBlock.id == id) then
+        touchMousePressBlock = nil
+    end
+end
+
+local function clearTouchMouseReleaseBlock(id)
+    if touchMouseReleaseBlock and (id == nil or touchMouseReleaseBlock.id == id) then
+        touchMouseReleaseBlock = nil
+    end
 end
 
 local function getJoystickId(joystick)
@@ -531,6 +620,9 @@ local function resetTransientInputState()
         end
     end
     activeTriggerAxes = {}
+    clearPointerPressTransitionBlock()
+    touchMousePressBlock = nil
+    touchMouseReleaseBlock = nil
 
     for deviceKey, latchedStates in pairs(latchedOneShotInputs) do
         for buttonKey in pairs(latchedStates) do
@@ -784,8 +876,8 @@ local function updateScaling()
     SETTINGS.DISPLAY.SCALE = math.min(scaleX, scaleY)
 
     -- Calc the offsets to center the game on screen
-    SETTINGS.DISPLAY.OFFSETX = (currentWindowWidth - SETTINGS.DISPLAY.WIDTH * SETTINGS.DISPLAY.SCALE) / 2
-    SETTINGS.DISPLAY.OFFSETY = (currentWindowHeight - SETTINGS.DISPLAY.HEIGHT * SETTINGS.DISPLAY.SCALE) / 2
+    SETTINGS.DISPLAY.OFFSETX = renderingQuality.roundToPhysicalPixel((currentWindowWidth - SETTINGS.DISPLAY.WIDTH * SETTINGS.DISPLAY.SCALE) / 2)
+    SETTINGS.DISPLAY.OFFSETY = renderingQuality.roundToPhysicalPixel((currentWindowHeight - SETTINGS.DISPLAY.HEIGHT * SETTINGS.DISPLAY.SCALE) / 2)
 
 end
 
@@ -1599,6 +1691,9 @@ local function ensureOnlineRuntimeState()
     if online.pendingInviteJoinLobbyId == nil then
         online.pendingInviteJoinLobbyId = nil
     end
+    if online.pendingInviteJoinDirectToFaction == nil then
+        online.pendingInviteJoinDirectToFaction = nil
+    end
     if online.lastInvitePromptKey == nil then
         online.lastInvitePromptKey = nil
     end
@@ -1645,6 +1740,17 @@ local function resolveInvitePromptPayload(event)
     }
 end
 
+local function shouldBlockInvitePromptForCurrentState()
+    local current = GAME and GAME.CURRENT or nil
+    local mode = GAME and GAME.MODE or nil
+    local online = current and current.ONLINE or nil
+    return currentStateName == "gameplay"
+        and mode ~= nil
+        and current.MODE == mode.MULTYPLAYER_NET
+        and online ~= nil
+        and online.active == true
+end
+
 local function enqueueOnlineLobbyEvent(event)
     if type(event) ~= "table" then
         return
@@ -1682,7 +1788,13 @@ local function processGlobalOnlineLobbyEvents()
                         (current - (tonumber(online.lastInvitePromptAt) or 0)) < INVITE_PROMPT_DEDUPE_SEC
                     local isDuplicatePending = type(pending) == "table" and pending.dedupeKey == payload.dedupeKey
 
-                    if not isDuplicateRecent and not isDuplicatePending then
+                    if shouldBlockInvitePromptForCurrentState() then
+                        online.pendingInvitePrompt = nil
+                        online.lastInvitePromptKey = payload.dedupeKey
+                        online.lastInvitePromptAt = current
+                        online.blockedInvitePromptAt = current
+                        online.blockedInvitePromptLobbyId = payload.lobbyId
+                    elseif not isDuplicateRecent and not isDuplicatePending then
                         online.pendingInvitePrompt = payload
                         online.lastInvitePromptKey = payload.dedupeKey
                         online.lastInvitePromptAt = current
@@ -1696,12 +1808,22 @@ local function processGlobalOnlineLobbyEvents()
 
     local online = ensureOnlineRuntimeState()
     local invitePrompt = online.pendingInvitePrompt
+    if invitePrompt and shouldBlockInvitePromptForCurrentState() then
+        online.pendingInvitePrompt = nil
+        online.lastInvitePromptKey = invitePrompt.dedupeKey
+        online.lastInvitePromptAt = nowSeconds()
+        online.blockedInvitePromptAt = online.lastInvitePromptAt
+        online.blockedInvitePromptLobbyId = invitePrompt.lobbyId
+        invitePrompt = nil
+    end
+
     if invitePrompt and invitePrompt.lobbyId and ConfirmDialog and ConfirmDialog.isActive and not ConfirmDialog.isActive() then
         ConfirmDialog.show(
             "You are invited by " .. tostring(invitePrompt.inviterName or "a player") .. ". Join?",
             function()
                 local runtimeOnline = ensureOnlineRuntimeState()
                 runtimeOnline.pendingInviteJoinLobbyId = tostring(invitePrompt.lobbyId)
+                runtimeOnline.pendingInviteJoinDirectToFaction = true
                 runtimeOnline.pendingInvitePrompt = nil
                 if currentStateName ~= "onlineLobby" and states.onlineLobby then
                     stateMachine.changeState("onlineLobby")
@@ -1819,6 +1941,10 @@ end
 
 -- Mouse input
 function stateMachine.mousemoved(x, y, dx, dy, istouch, sourceOverride)
+    if pointerPressTransitionBlockActive then
+        return nil
+    end
+
     local source = sourceOverride or hostKeyboardMouseSource()
     return withInputSource(source, function()
         local sourceKind = tostring(source and source.kind or "")
@@ -1838,16 +1964,39 @@ function stateMachine.mousemoved(x, y, dx, dy, istouch, sourceOverride)
 end
 
 function stateMachine.mousepressed(x, y, button, istouch, presses, sourceOverride)
+    if shouldBlockTouchMousePress(button, istouch, sourceOverride) then
+        return true
+    end
+
+    if shouldBlockPointerPress(button) then
+        return nil
+    end
+
     local source = sourceOverride or hostKeyboardMouseSource()
-    return withInputSource(source, function()
+    local stateBeforeMousepress = currentState
+    local stateNameBeforeMousepress = currentStateName
+    local result = withInputSource(source, function()
         if currentState and currentState.mousepressed then
             return currentState.mousepressed(x, y, button, istouch, presses)
         end
         return nil
     end)
+    if currentState ~= stateBeforeMousepress or currentStateName ~= stateNameBeforeMousepress then
+        beginPointerPressTransitionBlock(button)
+    end
+    return result
 end
 
 function stateMachine.mousereleased(x, y, button, istouch, presses, sourceOverride)
+    if shouldBlockTouchMouseRelease(button, istouch, sourceOverride) then
+        return true
+    end
+
+    if pointerPressTransitionBlockActive then
+        clearPointerPressTransitionBlock()
+        return nil
+    end
+
     local source = sourceOverride or hostKeyboardMouseSource()
     return withInputSource(source, function()
         if currentState and currentState.mousereleased then
@@ -1879,13 +2028,20 @@ function stateMachine.touchpressed(id, x, y, dx, dy, pressure)
 
     local screenX, screenY = touchToScreen(x, y)
     activeTouches[id] = { x = screenX, y = screenY }
-    stateMachine.mousepressed(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())
-    return withInputSource(hostKeyboardMouseSource(), function()
-        if currentState and currentState.touchpressed then
-            return currentState.touchpressed(id, x, y, dx, dy, pressure)
-        end
+    if shouldBlockPointerPress(1) then
+        suppressedTouchReleaseIds[id] = true
         return nil
-    end)
+    end
+
+    local stateBeforeTouchMousepress = currentState
+    local stateNameBeforeTouchMousepress = currentStateName
+    local mouseResult = stateMachine.mousepressed(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())
+    beginTouchMousePressBlock(id, 1)
+    if currentState ~= stateBeforeTouchMousepress or currentStateName ~= stateNameBeforeTouchMousepress then
+        suppressedTouchReleaseIds[id] = true
+        return mouseResult
+    end
+    return mouseResult
 end
 
 function stateMachine.touchmoved(id, x, y, dx, dy, pressure)
@@ -1895,37 +2051,46 @@ function stateMachine.touchmoved(id, x, y, dx, dy, pressure)
 
     local screenX, screenY = touchToScreen(x, y)
     local deltaX, deltaY = touchDeltaToScreen(dx or 0, dy or 0)
-    stateMachine.mousemoved(screenX, screenY, deltaX, deltaY, true, hostKeyboardMouseSource())
+    local mouseResult = stateMachine.mousemoved(screenX, screenY, deltaX, deltaY, true, hostKeyboardMouseSource())
     if activeTouches[id] then
         activeTouches[id].x = screenX
         activeTouches[id].y = screenY
     end
-    return withInputSource(hostKeyboardMouseSource(), function()
-        if currentState and currentState.touchmoved then
-            return currentState.touchmoved(id, x, y, dx, dy, pressure)
-        end
+    if suppressedTouchReleaseIds[id] == true then
         return nil
-    end)
+    end
+    return mouseResult
 end
 
 function stateMachine.touchreleased(id, x, y, dx, dy, pressure)
     if touchPrimaryOnlyEnabled() and primaryTouchId ~= nil and primaryTouchId ~= id then
         activeTouches[id] = nil
+        suppressedTouchReleaseIds[id] = nil
         return
     end
 
+    local suppressTouchRelease = suppressedTouchReleaseIds[id] == true
+    suppressedTouchReleaseIds[id] = nil
     local screenX, screenY = touchToScreen(x, y)
-    stateMachine.mousereleased(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())
+    if suppressTouchRelease then
+        activeTouches[id] = nil
+        clearTouchMousePressBlock(id)
+        clearTouchMouseReleaseBlock(id)
+        if id == primaryTouchId then
+            primaryTouchId = nil
+        end
+        clearPointerPressTransitionBlock()
+        return nil
+    end
+
+    local mouseResult = stateMachine.mousereleased(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())
+    beginTouchMouseReleaseBlock(id, 1)
     activeTouches[id] = nil
+    clearTouchMousePressBlock(id)
     if id == primaryTouchId then
         primaryTouchId = nil
     end
-    return withInputSource(hostKeyboardMouseSource(), function()
-        if currentState and currentState.touchreleased then
-            return currentState.touchreleased(id, x, y, dx, dy, pressure)
-        end
-        return nil
-    end)
+    return mouseResult
 end
 
 -- Keyboard input
@@ -1942,6 +2107,16 @@ end
 function stateMachine.keypressed(key, scancode, isrepeat, sourceOverride)
     local source = sourceOverride or hostKeyboardMouseSource()
     return withInputSource(source, function()
+        if not isrepeat and isDesktopDisplayModeShortcut(key) then
+            if states.initialize and type(states.initialize.toggleDesktopDisplayMode) == "function" then
+                local toggled = states.initialize.toggleDesktopDisplayMode()
+                if toggled ~= false and love and love.graphics and love.graphics.getDimensions then
+                    stateMachine.resize(love.graphics.getDimensions())
+                end
+                return true
+            end
+        end
+
         local sourceKind = tostring(source and source.kind or "")
         local fromHostLocal = (
             sourceKind == "host_local_keyboard_mouse" or

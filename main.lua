@@ -8,7 +8,32 @@ local debugConsoleLog = require("debug_console_log")
 local audioRuntime = require("audio_runtime")
 local achievementRuntime = require("achievement_runtime")
 
-function love.load()
+local function queueSteamLaunchInvite(args)
+    if type(args) ~= "table" then
+        return nil
+    end
+
+    for i = 1, #args do
+        local value = tostring(args[i] or "")
+        local lobbyId = value:match("^%+connect_lobby=(%d+)$") or value:match("^%-connect_lobby=(%d+)$")
+
+        if (value == "+connect_lobby" or value == "-connect_lobby") and args[i + 1] ~= nil then
+            lobbyId = tostring(args[i + 1]):match("^(%d+)$")
+        end
+
+        if lobbyId then
+            GAME.CURRENT.ONLINE = GAME.CURRENT.ONLINE or {}
+            GAME.CURRENT.ONLINE.pendingInviteJoinLobbyId = lobbyId
+            GAME.CURRENT.ONLINE.pendingInviteJoinDirectToFaction = true
+            GAME.CURRENT.ONLINE.pendingSteamLaunchInvite = true
+            return lobbyId
+        end
+    end
+
+    return nil
+end
+
+function love.load(args, unfilteredArgs)
     debugConsoleLog.init({
         enabled = SETTINGS
             and SETTINGS.PERF
@@ -17,6 +42,7 @@ function love.load()
     audioRuntime.init()
     achievementRuntime.init()
     steamRuntime.init()
+    queueSteamLaunchInvite(unfilteredArgs or args or _G.arg)
     state_machine.changeState("initialize")
     -- Enable key repeat so holding arrow keys continuously sends keypress events
     if love.keyboard and love.keyboard.setKeyRepeat then
@@ -42,14 +68,23 @@ end
 
 -- Mouse
 function love.mousemoved(x, y, dx, dy, istouch)
+    if istouch == true then
+        return true
+    end
     state_machine.mousemoved(x, y, dx, dy, istouch)
 end
 
 function love.mousepressed(x, y, button, istouch, presses)
+    if istouch == true then
+        return true
+    end
     state_machine.mousepressed(x, y, button, istouch, presses)
 end
 
 function love.mousereleased(x, y, button, istouch, presses)
+    if istouch == true then
+        return true
+    end
     state_machine.mousereleased(x, y, button, istouch, presses)
 end
 

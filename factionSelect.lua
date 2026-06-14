@@ -67,8 +67,16 @@ local localOnlineRatingProfile = nil
 local peerOnlineRatingProfile = nil
 local lastRemotePlayGuestCount = 0
 local REMOTE_PLAY_INPUT_WARN_AFTER_SEC = 8.0
+local INVITE_WAIT_PROMPT_DELAY_SEC = 30
+local INVITE_ARRIVAL_NOTICE_DURATION_SEC = 4.0
 local buildOnlineSetupPayload = nil
+local getOnlineSeatDisplayNames = nil
 local uiElements = {}
+local inviteArrivalNotice = {
+    visible = false,
+    message = "",
+    startedAt = 0
+}
 local navState = {
     selectedSection = 1,  -- 1 = blue faction, 2 = red faction, 3 = buttons
     selectedSectionItem = 1, -- For factions: 1 = left arrow, 2 = right arrow; For buttons: 1 = back, 2 = random, 3 = start
@@ -140,6 +148,7 @@ local function computeFactionScreenLayout()
     local buttonGap = math.floor(clamp(displayW * 0.014, 12, 18))
     local buttonY = selectorsY + selectorHeight + math.floor(displayH * 0.055)
 
+    local selectorFontSize = math.floor(clamp(displayH * 0.03, 20, 24))
     local buttonFontSize = math.floor(clamp(displayH * 0.033, 22, 28))
     local footerFontSize = math.floor(clamp(displayH * 0.021, 16, 20))
     local maxButtonY = displayH - buttonHeight - (footerFontSize + 30)
@@ -161,6 +170,7 @@ local function computeFactionScreenLayout()
         selectorsY = selectorsY,
         selectorW = cardWidth,
         selectorH = selectorHeight,
+        selectorFontSize = selectorFontSize,
         buttonW = buttonWidth,
         buttonH = buttonHeight,
         buttonGap = buttonGap,
@@ -223,10 +233,26 @@ local function getOnlineSession()
     return GAME.CURRENT.ONLINE and GAME.CURRENT.ONLINE.session or nil
 end
 
+local function consumeOnlineRatingRepairNotice(context)
+    if not onlineRatingStore or type(onlineRatingStore.consumeRepairNotice) ~= "function" then
+        return
+    end
+
+    local repairNotice = onlineRatingStore.consumeRepairNotice()
+    if repairNotice then
+        print(string.format(
+            "[OnlineFactionSelect] Rating profile repaired during %s: %s",
+            tostring(context or "online_faction"),
+            tostring(repairNotice.text or repairNotice.title or "repair_complete")
+        ))
+    end
+end
+
 local function resolveStoredOnlineRatingSeed(defaultRating)
     local fallback = tonumber(defaultRating) or 1200
     if onlineRatingStore and type(onlineRatingStore.loadProfile) == "function" then
         local profile = onlineRatingStore.loadProfile()
+        consumeOnlineRatingRepairNotice("rating_seed")
         if type(profile) == "table" and tonumber(profile.rating) ~= nil then
             return math.floor((tonumber(profile.rating) or fallback) + 0.5)
         end
@@ -271,13 +297,7 @@ local function ensureLocalOnlineRatingProfileLoaded()
         tostring(math.floor((localOnlineRatingProfile.rd or 0) + 0.5)),
         tostring(localOnlineRatingProfile.games or 0)
     ))
-    local repairNotice = onlineRatingStore.consumeRepairNotice and onlineRatingStore.consumeRepairNotice() or nil
-    if repairNotice and ConfirmDialog and type(ConfirmDialog.showMessage) == "function" and type(ConfirmDialog.isActive) == "function" and not ConfirmDialog.isActive() then
-        ConfirmDialog.showMessage(repairNotice.text, nil, {
-            title = repairNotice.title,
-            confirmText = "OK"
-        })
-    end
+    consumeOnlineRatingRepairNotice("profile_load")
     return localOnlineRatingProfile
 end
 
@@ -440,6 +460,19 @@ local function canStartOnlineMatch()
         and peerOnlineRatingProfile ~= nil
 end
 
+local function validateOnlineMatchStartPayload(payload)
+    if type(payload) ~= "table" then
+        return false, "invalid_match_start_payload"
+    end
+    if type(payload.setup) ~= "table" then
+        return false, "match_start_setup_missing"
+    end
+    if payload.seed == nil then
+        return false, "match_start_seed_missing"
+    end
+    return true
+end
+
 local function clearPendingGuestReady(reason)
     if pendingGuestReady ~= nil then
         logFactionDebug("[OnlineFactionSelect] Clearing pending guest ready: " .. tostring(reason or "unspecified"))
@@ -453,9 +486,14 @@ local function clearOnlineRuntimeState(reasonCode)
     local online = GAME.CURRENT.ONLINE
     online.active = false
     online.role = nil
+    online.factionRole = nil
     online.session = nil
     online.lockstep = nil
     online.autoJoinLobbyId = nil
+    online.inviteWaitStartedAt = nil
+    online.inviteWaitPromptShown = nil
+    online.inviteArrivalNoticePending = nil
+    online.inviteArrivalNoticeShown = nil
     online.pendingLobbyEvents = {}
     online.eloSummary = nil
     if reasonCode then
@@ -516,6 +554,123 @@ local function resetPrematchTransportState(reason)
     if reason then
         logFactionDebug("[OnlineFactionSelect] Prematch transport reset: " .. tostring(reason))
     end
+end
+
+local function clearInviteWaitPromptState()
+    if not GAME.CURRENT.ONLINE then
+        return
+    end
+    GAME.CURRENT.ONLINE.inviteWaitStartedAt = nil
+    GAME.CURRENT.ONLINE.inviteWaitPromptShown = nil
+end
+
+local function clearInviteArrivalNotice()
+    inviteArrivalNotice.visible = false
+    inviteArrivalNotice.message = ""
+    inviteArrivalNotice.startedAt = 0
+end
+
+local function isInviteWaitDialogActive()
+    return ConfirmDialog
+        and type(ConfirmDialog.isActive) == "function"
+        and ConfirmDialog.isActive()
+        and type(ConfirmDialog.getTitle) == "function"
+        and ConfirmDialog.getTitle() == "Waiting for Opponent"
+end
+
+local function showInviteArrivalNotice(session)
+    local online = GAME.CURRENT.ONLINE
+    if not online or online.inviteArrivalNoticePending ~= true or online.inviteArrivalNoticeShown == true then
+        return false
+    end
+    if not session or session.role ~= "host" then
+        return false
+    end
+
+    online.inviteArrivalNoticePending = nil
+    online.inviteArrivalNoticeShown = true
+    clearInviteWaitPromptState()
+
+    if isInviteWaitDialogActive() then
+        ConfirmDialog.hide(true)
+    end
+
+    local _, guestName = getOnlineSeatDisplayNames()
+    if not guestName or guestName == "" then
+        guestName = "Opponent"
+    end
+
+    inviteArrivalNotice.visible = true
+    inviteArrivalNotice.message = tostring(guestName) .. " joined faction setup."
+    inviteArrivalNotice.startedAt = nowSeconds()
+    return true
+end
+
+local function hasConnectedOnlinePeer(session)
+    return session
+        and session.connected == true
+        and session.peerUserId ~= nil
+        and tostring(session.peerUserId) ~= tostring(session.localUserId)
+end
+
+local function cancelInviteWaitAndReturnToLobby()
+    local session = getOnlineSession()
+    if session and session.active then
+        session:leave()
+    end
+
+    clearPendingGuestReady("invite_cancel")
+    resetPrematchTransportState("invite_cancel")
+    clearOnlineRuntimeState("invite_cancel")
+    disconnectDialogShown = false
+    remotePlayNoInputWarned = false
+
+    if stateMachineRef and stateMachineRef.changeState then
+        stateMachineRef.changeState("onlineLobby")
+    end
+end
+
+local function updateInviteWaitPrompt(session)
+    local online = GAME.CURRENT.ONLINE
+    if not online or not online.inviteWaitStartedAt then
+        return
+    end
+
+    if hasConnectedOnlinePeer(session) then
+        clearInviteWaitPromptState()
+        return
+    end
+
+    if not session or not session.active or session.role ~= "host" or not session.lobbyId then
+        clearInviteWaitPromptState()
+        return
+    end
+
+    if online.inviteWaitPromptShown == true or ConfirmDialog.isActive() then
+        return
+    end
+
+    local elapsed = nowSeconds() - (tonumber(online.inviteWaitStartedAt) or nowSeconds())
+    if elapsed < INVITE_WAIT_PROMPT_DELAY_SEC then
+        return
+    end
+
+    online.inviteWaitPromptShown = true
+    ConfirmDialog.show(
+        "Your opponent has not joined yet.",
+        function()
+            clearInviteWaitPromptState()
+        end,
+        function()
+            cancelInviteWaitAndReturnToLobby()
+        end,
+        {
+            title = "Waiting for Opponent",
+            confirmText = "Keep Waiting",
+            cancelText = "Cancel Invite",
+            defaultFocus = "confirm"
+        }
+    )
 end
 
 local function queuePendingReadyStateBroadcast()
@@ -1523,7 +1678,7 @@ local function getMatchupOptionsForMode(mode)
 end
 
 -- Build controller options for a single faction selector
-local function getOnlineSeatDisplayNames()
+getOnlineSeatDisplayNames = function()
     local hostName = "Player"
     local guestName = "Player"
 
@@ -1563,6 +1718,49 @@ local function getOnlineSeatDisplayNames()
     end
 
     return hostName, guestName
+end
+
+local function resolveOnlineSeatSteamId(session, seatRole)
+    if not session then
+        return nil
+    end
+    if seatRole == "host" then
+        return session.hostUserId or (session.role == "host" and session.localUserId or session.peerUserId)
+    end
+    if seatRole == "guest" then
+        return session.guestUserId or (session.role == "guest" and session.localUserId or session.peerUserId)
+    end
+    return nil
+end
+
+local function syncOnlineControllerPersonas(session)
+    if not isOnlineMode() or not session then
+        return false
+    end
+
+    local controllers = GAME.CURRENT.CONTROLLERS or {}
+    local hostName, guestName = getOnlineSeatDisplayNames()
+    local changed = false
+
+    for _, controller in pairs(controllers) do
+        local metadata = controller and controller.metadata
+        local role = metadata and metadata.role
+        if role == "host" or role == "guest" then
+            local desiredName = role == "host" and hostName or guestName
+            local desiredSteamId = resolveOnlineSeatSteamId(session, role)
+            if desiredName and desiredName ~= "" and controller.nickname ~= desiredName then
+                controller.nickname = desiredName
+                changed = true
+            end
+            controller.metadata = metadata or {}
+            if desiredSteamId and controller.metadata.steamId ~= desiredSteamId then
+                controller.metadata.steamId = desiredSteamId
+                changed = true
+            end
+        end
+    end
+
+    return changed
 end
 
 local function getSeatRoleFromOption(option)
@@ -2581,6 +2779,7 @@ function factionSelect.enter(stateMachine, prevState, params)
     stateMachineRef = stateMachine
     GAME_STATE.initialized = true
     disconnectDialogShown = false
+    clearInviteArrivalNotice()
 
     if GAME.CURRENT.MODE == GAME.MODE.MULTYPLAYER_LOCAL then
         if not GAME.CURRENT.LOCAL_MATCH_VARIANT or GAME.CURRENT.LOCAL_MATCH_VARIANT == "" then
@@ -3020,6 +3219,7 @@ function factionSelect.startGame()
     end
 
     logFactionDebug("=== Starting Game ===")
+    syncOnlineControllerPersonas(getOnlineSession())
     applyControllerAssignmentsFromSelectors()
     broadcastOnlineSetupSnapshot(true)
     flushPendingHostBroadcasts(true)
@@ -3074,12 +3274,27 @@ function factionSelect.startGame()
             local seed = GAME.CURRENT.SEED or randomGen.getSeed() or fallbackSeed
             local matchPayload = session:createMatchStartPayload(seed, setupPayload)
 
-            lockstep:sendPacket({
+            local validPayload, payloadErr = validateOnlineMatchStartPayload(matchPayload)
+            if not validPayload then
+                print("[OnlineFactionSelect] Match start blocked: " .. tostring(payloadErr))
+                return
+            end
+
+            local sent, sendErr = lockstep:sendPacket({
                 kind = "MATCH_START",
                 sessionId = session.sessionId,
                 payload = matchPayload
             })
-            session:applyMatchStartPayload(matchPayload)
+            if not sent then
+                print("[OnlineFactionSelect] Match start send failed: " .. tostring(sendErr))
+                return
+            end
+
+            local applied, applyErr = session:applyMatchStartPayload(matchPayload)
+            if not applied then
+                print("[OnlineFactionSelect] Match start apply failed: " .. tostring(applyErr))
+                return
+            end
         end
 
         logFactionDebug("Changing state to gameplay...")
@@ -3119,6 +3334,8 @@ local function processOnlineFactionSelectSync()
         end
     end
 
+    syncOnlineControllerPersonas(session)
+
     if connectedBefore ~= (session.connected == true) then
         logFactionDebug("[OnlineFactionSelect] Connection state changed: " .. tostring(connectedBefore) .. " -> " .. tostring(session.connected == true))
         if session.connected == true then
@@ -3142,6 +3359,8 @@ local function processOnlineFactionSelectSync()
         showFactionDisconnectDialogAndExit("peer_timeout_pre_match")
         return "state_changed"
     end
+
+    updateInviteWaitPrompt(session)
 
     if session.connected == true and session.peerUserId and tostring(session.peerUserId) ~= tostring(session.localUserId) then
         if prematchTransportReady ~= true then
@@ -3185,6 +3404,7 @@ local function processOnlineFactionSelectSync()
             if awaitingPrematchAckNonce ~= 0 and nonce == awaitingPrematchAckNonce then
                 prematchTransportReady = true
                 awaitingPrematchAckNonce = 0
+                showInviteArrivalNotice(session)
                 logFactionDebug("[OnlineFactionSelect] Prematch transport ready (nonce acked)")
             end
         elseif event.kind == "setup_snapshot" then
@@ -3228,14 +3448,25 @@ local function processOnlineFactionSelectSync()
             logReadyTelemetryState("ready_state")
         elseif event.kind == "match_start" then
             local payload = event.payload and event.payload.payload
-            if payload then
-                session:applyMatchStartPayload(payload)
-                if payload.setup then
-                    applyOnlineSetupPayload(payload.setup)
-                end
-                if payload.seed then
-                    GAME.CURRENT.SEED = payload.seed
-                end
+            local validPayload, payloadErr = validateOnlineMatchStartPayload(payload)
+            if not validPayload then
+                print("[OnlineFactionSelect] Invalid match start payload: " .. tostring(payloadErr))
+                showFactionDisconnectDialogAndExit(payloadErr)
+                return "state_changed"
+            end
+
+            local applied, applyErr = session:applyMatchStartPayload(payload)
+            if not applied then
+                print("[OnlineFactionSelect] Failed to apply match start payload: " .. tostring(applyErr))
+                showFactionDisconnectDialogAndExit(applyErr or "invalid_match_start_payload")
+                return "state_changed"
+            end
+
+            if payload.setup then
+                applyOnlineSetupPayload(payload.setup)
+            end
+            if payload.seed then
+                GAME.CURRENT.SEED = payload.seed
             end
             clearPendingGuestReady("match_start")
             if stateMachineRef and stateMachineRef.changeState then
@@ -3352,6 +3583,43 @@ function factionSelect.update(dt)
             end
         end
     end
+end
+
+local function drawInviteArrivalNotice()
+    if inviteArrivalNotice.visible ~= true then
+        return
+    end
+
+    local elapsed = nowSeconds() - (inviteArrivalNotice.startedAt or nowSeconds())
+    if elapsed >= INVITE_ARRIVAL_NOTICE_DURATION_SEC then
+        clearInviteArrivalNotice()
+        return
+    end
+
+    local alpha = 1
+    if elapsed > (INVITE_ARRIVAL_NOTICE_DURATION_SEC - 0.6) then
+        alpha = math.max(0, (INVITE_ARRIVAL_NOTICE_DURATION_SEC - elapsed) / 0.6)
+    end
+
+    local previousFont = love.graphics.getFont()
+    local noticeFont = getMonogramFont(22)
+    love.graphics.setFont(noticeFont)
+
+    local width = math.min(520, SETTINGS.DISPLAY.WIDTH - 80)
+    local height = 54
+    local x = math.floor((SETTINGS.DISPLAY.WIDTH - width) / 2)
+    local y = 88
+
+    love.graphics.setColor(28/255, 72/255, 44/255, 0.94 * alpha)
+    love.graphics.rectangle("fill", x, y, width, height, 8, 8)
+    love.graphics.setColor(86/255, 176/255, 104/255, alpha)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("line", x, y, width, height, 8, 8)
+    love.graphics.setLineWidth(1)
+    love.graphics.setColor(0.92, 0.99, 0.93, alpha)
+    love.graphics.printf(inviteArrivalNotice.message or "Opponent joined faction setup.", x + 14, y + 16, width - 28, "center")
+
+    love.graphics.setFont(previousFont)
 end
 
 function factionSelect.draw()
@@ -3499,7 +3767,7 @@ function factionSelect.draw()
         else
             love.graphics.setColor(baseColor[1], baseColor[2], baseColor[3], baseColor[4])
         end
-        local displayText = ""
+        local displayText
         if selector.options and selector.options[selector.currentOption] then
             local optionData = selector.options[selector.currentOption]
             displayText = optionData.label or tostring(optionData.id or "")
@@ -3508,8 +3776,11 @@ function factionSelect.draw()
         end
         local textInsetLeft = showSelectorArrows and 40 or 12
         local textInsetRight = showSelectorArrows and 40 or 12
+        local selectorFont = getMonogramFont(currentLayout.selectorFontSize)
+        love.graphics.setFont(selectorFont)
+        local textY = selector.y + math.floor(((selector.height - selectorFont:getHeight()) / 2) + 0.5)
         love.graphics.printf(displayText,
-                             selector.x + textInsetLeft, selector.y + 12, selector.width - (textInsetLeft + textInsetRight), "center")
+                             selector.x + textInsetLeft, textY, selector.width - (textInsetLeft + textInsetRight), "center")
     end
 
     -- Draw action buttons from a single visible-source list
@@ -3542,6 +3813,8 @@ function factionSelect.draw()
     love.graphics.setColor(0.97, 0.95, 0.90, 0.9)
     love.graphics.print(footerText, footerX, footerY)
 
+    drawInviteArrivalNotice()
+
     love.graphics.setFont(previousFont)
 
     -- Draw confirmation dialog if active (above everything else)
@@ -3563,6 +3836,7 @@ function factionSelect.exit()
     disconnectDialogShown = false
     remotePlayNoInputWarned = false
     lastRemotePlayGuestCount = 0
+    clearInviteArrivalNotice()
 
     -- Clean up card assets
     cardAssets.cardTemplate = nil

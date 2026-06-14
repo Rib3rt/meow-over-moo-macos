@@ -2029,6 +2029,7 @@ local function runMatch(matchIndex, opts)
             if attackEvent then
                 turnAttackEvents[#turnAttackEvents + 1] = attackEvent
             end
+            local actionInteraction
             state, actionInteraction = applyActionToState(ai, state, resolved, currentPlayer)
             stateRef.state = state
             if attackEvent and attackEvent.rangedDuelOpening == true and attackEvent.targetPlayer then

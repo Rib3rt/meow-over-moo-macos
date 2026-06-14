@@ -14,6 +14,8 @@ SETTINGS.ELO = SETTINGS.ELO or {
 
 local SteamOnlineSession = require("steam_online_session")
 local SteamLockstep = require("steam_lockstep")
+local SteamPacketCodec = require("steam_packet_codec")
+local steamRuntime = require("steam_runtime")
 
 local results = {}
 
@@ -157,6 +159,179 @@ runTest("lockstep_propose_accept_commit", function()
     local guestEvent = guest:pollEvent()
     assertTrue(hostEvent and hostEvent.kind == "apply_command", "host should apply committed command")
     assertTrue(guestEvent and guestEvent.kind == "apply_command", "guest should apply committed command")
+end)
+
+runTest("codec_rejects_nil_table_key_without_crash", function()
+    local raw = "t2:s7:versiond1;s6:packett1:ns1:x"
+    local packet, err = SteamPacketCodec.decode(raw, SETTINGS.STEAM_ONLINE.PROTOCOL_VERSION)
+    assertTrue(packet == nil, "malformed nil-key packet should not decode")
+    assertTrue(err == "invalid_table_key", "nil table key should return invalid_table_key")
+end)
+
+runTest("lockstep_poll_network_reports_malformed_packets", function()
+    local session = SteamOnlineSession.new({localUserId = "host"})
+    session.active = true
+    session.sessionId = "malformed-session"
+    session.peerUserId = "guest"
+    session.connected = true
+
+    local l = SteamLockstep.new({session = session})
+    local savedPollNet = steamRuntime.pollNet
+    steamRuntime.pollNet = function()
+        return {{
+            peerId = "guest",
+            payload = "t2:s7:versiond1;s6:packett1:ns1:x"
+        }}
+    end
+
+    local ok, err = pcall(function()
+        l:pollNetwork()
+        local event = l:pollEvent()
+        assertTrue(event and event.kind == "protocol_error", "malformed packet should emit protocol_error")
+        assertTrue(event.payload and event.payload.reason == "invalid_table_key", "protocol error should name invalid table key")
+    end)
+    steamRuntime.pollNet = savedPollNet
+    if not ok then
+        error(err, 0)
+    end
+end)
+
+runTest("lockstep_poll_network_treats_nil_packet_list_as_empty", function()
+    local session = SteamOnlineSession.new({localUserId = "host"})
+    session.active = true
+    session.sessionId = "nil-poll-session"
+    session.peerUserId = "guest"
+    session.connected = true
+
+    local l = SteamLockstep.new({session = session})
+    local savedPollNet = steamRuntime.pollNet
+    steamRuntime.pollNet = function()
+        return nil
+    end
+
+    local ok, err = pcall(function()
+        l:pollNetwork()
+        assertTrue(l:pollEvent() == nil, "nil packet list should behave like no packets")
+    end)
+    steamRuntime.pollNet = savedPollNet
+    if not ok then
+        error(err, 0)
+    end
+end)
+
+runTest("lockstep_validator_error_rejects_remote_command_without_crash", function()
+    local session = SteamOnlineSession.new({localUserId = "host"})
+    session.active = true
+    session.sessionId = "validate-error-session"
+    session.peerUserId = "guest"
+    session.connected = true
+
+    local l = SteamLockstep.new({
+        session = session,
+        validateCommand = function()
+            error("validator exploded")
+        end
+    })
+    local sentPacket = nil
+    l.sendPacket = function(_, packet)
+        sentPacket = packet
+        return true
+    end
+
+    l:injectPacket({
+        kind = "ACTION_PROPOSE",
+        sessionId = "validate-error-session",
+        seq = 1,
+        proposerId = "guest",
+        commandId = "guest:1",
+        command = { actionType = "move" },
+        context = {}
+    })
+
+    local event = l:pollEvent()
+    assertTrue(event and event.kind == "protocol_error", "validator crash should emit protocol_error")
+    assertTrue(event.payload and event.payload.reason == "command_validate_error", "validator crash reason should be reported")
+    assertTrue(sentPacket and sentPacket.kind == "ACTION_REJECT", "validator crash should reject the remote command")
+end)
+
+runTest("lockstep_poll_network_rejects_unexpected_peer_before_traffic_note", function()
+    local session = SteamOnlineSession.new({localUserId = "host"})
+    session.active = true
+    session.sessionId = "peer-check-session"
+    session.peerUserId = "guest"
+    session.connected = true
+
+    local notedPeer = nil
+    session.notePeerTraffic = function(_, peerId)
+        notedPeer = peerId
+    end
+
+    local raw = SteamPacketCodec.encode({
+        kind = "HEARTBEAT",
+        sessionId = "peer-check-session",
+        timestamp = 1
+    }, SETTINGS.STEAM_ONLINE.PROTOCOL_VERSION)
+
+    local l = SteamLockstep.new({session = session})
+    local savedPollNet = steamRuntime.pollNet
+    steamRuntime.pollNet = function()
+        return {{
+            peerId = "intruder",
+            payload = raw
+        }}
+    end
+
+    local ok, err = pcall(function()
+        l:pollNetwork()
+        local event = l:pollEvent()
+        assertTrue(event and event.kind == "protocol_error", "unexpected peer should emit protocol_error")
+        assertTrue(event.payload and event.payload.reason == "unexpected_peer", "unexpected peer should be rejected")
+        assertTrue(notedPeer == nil, "unexpected peer must not refresh session traffic")
+    end)
+    steamRuntime.pollNet = savedPollNet
+    if not ok then
+        error(err, 0)
+    end
+end)
+
+runTest("lockstep_poll_network_rejects_session_mismatch_before_traffic_note", function()
+    local session = SteamOnlineSession.new({localUserId = "host"})
+    session.active = true
+    session.sessionId = "expected-session"
+    session.peerUserId = "guest"
+    session.connected = true
+
+    local notedPeer = nil
+    session.notePeerTraffic = function(_, peerId)
+        notedPeer = peerId
+    end
+
+    local raw = SteamPacketCodec.encode({
+        kind = "HEARTBEAT",
+        sessionId = "other-session",
+        timestamp = 1
+    }, SETTINGS.STEAM_ONLINE.PROTOCOL_VERSION)
+
+    local l = SteamLockstep.new({session = session})
+    local savedPollNet = steamRuntime.pollNet
+    steamRuntime.pollNet = function()
+        return {{
+            peerId = "guest",
+            payload = raw
+        }}
+    end
+
+    local ok, err = pcall(function()
+        l:pollNetwork()
+        local event = l:pollEvent()
+        assertTrue(event and event.kind == "protocol_error", "session mismatch should emit protocol_error")
+        assertTrue(event.payload and event.payload.reason == "session_mismatch", "session mismatch should be rejected")
+        assertTrue(notedPeer == nil, "session mismatch must not refresh session traffic")
+    end)
+    steamRuntime.pollNet = savedPollNet
+    if not ok then
+        error(err, 0)
+    end
 end)
 
 runTest("hash_mismatch_aborts_no_winner", function()
@@ -337,6 +512,18 @@ runTest("invite_received_event_triggers_global_join_reject_prompt", function()
     assertTrue(content:find("stateMachine.changeState(\"onlineLobby\")", 1, true) ~= nil, "join branch should route to onlineLobby")
 end)
 
+runTest("invite_prompt_blocked_during_active_online_gameplay", function()
+    local content = readFile("stateMachine.lua")
+    assertTrue(type(content) == "string", "stateMachine.lua not readable")
+    assertTrue(content:find("shouldBlockInvitePromptForCurrentState", 1, true) ~= nil, "active online invite guard missing")
+    assertTrue(content:find('currentStateName == "gameplay"', 1, true) ~= nil, "invite guard should target gameplay")
+    assertTrue(content:find("current.MODE == mode.MULTYPLAYER_NET", 1, true) ~= nil, "invite guard should target online matches")
+    assertTrue(content:find("online.active == true", 1, true) ~= nil, "invite guard should require active online runtime")
+    assertTrue(content:find("online.blockedInvitePromptLobbyId = payload.lobbyId", 1, true) ~= nil, "blocked invite should be consumed without prompt")
+    assertTrue(content:find("if invitePrompt and shouldBlockInvitePromptForCurrentState() then", 1, true) ~= nil, "stale pending invite should be blocked before prompt display")
+    assertTrue(content:find("online.blockedInvitePromptLobbyId = invitePrompt.lobbyId", 1, true) ~= nil, "stale pending invite should be consumed without prompt")
+end)
+
 runTest("invite_requested_click_event_deduped_when_received_prompt_pending", function()
     local content = readFile("stateMachine.lua")
     assertTrue(type(content) == "string", "stateMachine.lua not readable")
@@ -357,28 +544,46 @@ runTest("invite_button_can_create_friends_lobby_when_no_active_session", functio
     assertTrue(content:find("steamRuntime.onGuideButtonPressed()", 1, true) ~= nil, "invite overlay trigger missing")
 end)
 
-runTest("invite_sender_wait_overlay_delayed_after_invite_send", function()
+runTest("invite_sender_enters_faction_select_before_wait_prompt", function()
     local content = readFile("onlineLobby.lua")
     assertTrue(type(content) == "string", "onlineLobby.lua not readable")
-    assertTrue(content:find("INVITE_WAIT_OVERLAY_DELAY_SEC = 8", 1, true) ~= nil, "invite wait delay constant missing")
-    assertTrue(content:find("armInviteWaitOverlay", 1, true) ~= nil, "invite wait arming helper missing")
-    assertTrue(content:find("inviteWaitVisible = true", 1, true) ~= nil, "invite wait overlay visibility trigger missing")
-    assertTrue(content:find("Waiting for Opponent", 1, true) ~= nil, "invite wait overlay title missing")
+    assertTrue(content:find("INVITE_WAIT_OVERLAY_DELAY_SEC", 1, true) == nil, "lobby should not keep a second invite-wait overlay")
+    assertTrue(content:find("armOnlineInviteWaitPrompt()", 1, true) ~= nil, "invite flow should arm faction-select wait prompt")
+    assertTrue(content:find("enterFactionSelectOnline()", 1, true) ~= nil, "invite flow should enter faction select immediately")
+    assertTrue(content:find("Choose factions while waiting", 1, true) ~= nil, "invite flow should report faction-select waiting")
 end)
 
-runTest("invite_sender_cancel_closes_host_lobby", function()
-    local content = readFile("onlineLobby.lua")
-    assertTrue(type(content) == "string", "onlineLobby.lua not readable")
-    assertTrue(content:find("cancelInviteWaitAndCloseHostLobby", 1, true) ~= nil, "invite cancel helper missing")
+runTest("invite_sender_wait_prompt_delayed_in_faction_select", function()
+    local content = readFile("factionSelect.lua")
+    assertTrue(type(content) == "string", "factionSelect.lua not readable")
+    assertTrue(content:find("INVITE_WAIT_PROMPT_DELAY_SEC = 30", 1, true) ~= nil, "faction invite wait delay should be 30 seconds")
+    assertTrue(content:find("updateInviteWaitPrompt(session)", 1, true) ~= nil, "faction wait prompt should be polled during online sync")
+    assertTrue(content:find('title = "Waiting for Opponent"', 1, true) ~= nil, "faction wait prompt title missing")
+    assertTrue(content:find('confirmText = "Keep Waiting"', 1, true) ~= nil, "keep waiting action missing")
+end)
+
+runTest("invite_sender_gets_faction_arrival_notice_after_prematch_ack", function()
+    local factionContent = readFile("factionSelect.lua")
+    local lobbyContent = readFile("onlineLobby.lua")
+    local dialogContent = readFile("confirmDialog.lua")
+    assertTrue(type(factionContent) == "string", "factionSelect.lua not readable")
+    assertTrue(type(lobbyContent) == "string", "onlineLobby.lua not readable")
+    assertTrue(type(dialogContent) == "string", "confirmDialog.lua not readable")
+    assertTrue(lobbyContent:find("online.inviteArrivalNoticePending = true", 1, true) ~= nil, "invite flow should arm host arrival notice")
+    assertTrue(factionContent:find("showInviteArrivalNotice(session)", 1, true) ~= nil, "prematch ack should trigger invite arrival notice")
+    assertTrue(factionContent:find('inviteArrivalNotice.message = tostring(guestName) .. " joined faction setup."', 1, true) ~= nil, "arrival notice copy missing")
+    assertTrue(factionContent:find('ConfirmDialog.getTitle() == "Waiting for Opponent"', 1, true) ~= nil, "arrival should only dismiss the invite wait dialog")
+    assertTrue(dialogContent:find("function confirmDialog.getTitle()", 1, true) ~= nil, "dialog title accessor missing")
+end)
+
+runTest("invite_sender_cancel_from_faction_select_closes_host_lobby", function()
+    local content = readFile("factionSelect.lua")
+    assertTrue(type(content) == "string", "factionSelect.lua not readable")
+    assertTrue(content:find("cancelInviteWaitAndReturnToLobby", 1, true) ~= nil, "invite cancel helper missing")
     assertTrue(content:find("session:leave()", 1, true) ~= nil, "invite cancel should leave host lobby")
-    assertTrue(content:find("Invite canceled. Lobby closed.", 1, true) ~= nil, "invite cancel status message missing")
-end)
-
-runTest("invite_sender_keep_waiting_preserves_active_lobby", function()
-    local content = readFile("onlineLobby.lua")
-    assertTrue(type(content) == "string", "onlineLobby.lua not readable")
-    assertTrue(content:find("handleInviteWaitDecision", 1, true) ~= nil, "invite wait decision helper missing")
-    assertTrue(content:find("Still waiting for opponent...", 1, true) ~= nil, "keep waiting status message missing")
+    assertTrue(content:find('clearOnlineRuntimeState("invite_cancel")', 1, true) ~= nil, "invite cancel should clear online runtime")
+    assertTrue(content:find('stateMachineRef.changeState("onlineLobby")', 1, true) ~= nil, "invite cancel should return to online lobby")
+    assertTrue(content:find('cancelText = "Cancel Invite"', 1, true) ~= nil, "cancel invite action missing")
 end)
 
 runTest("invite_join_leaves_existing_active_lobby_before_joining_invited", function()
@@ -1035,6 +1240,20 @@ runTest("no_regression_faction_ready_and_match_start_sync", function()
     assertTrue(content:find('stateMachineRef.changeState("gameplay")', 1, true) ~= nil, "match_start gameplay transition missing")
 end)
 
+runTest("match_start_send_failure_blocks_gameplay_transition", function()
+    local content = readFile("factionSelect.lua")
+    assertTrue(type(content) == "string", "factionSelect.lua not readable")
+    assertTrue(content:find("local sent, sendErr = lockstep:sendPacket({", 1, true) ~= nil, "match_start send result should be checked")
+    assertTrue(content:find("[OnlineFactionSelect] Match start send failed:", 1, true) ~= nil, "match_start send failure should be logged")
+end)
+
+runTest("match_start_payload_validation_blocks_invalid_guest_transition", function()
+    local content = readFile("factionSelect.lua")
+    assertTrue(type(content) == "string", "factionSelect.lua not readable")
+    assertTrue(content:find("validateOnlineMatchStartPayload(payload)", 1, true) ~= nil, "guest match_start payload should be validated")
+    assertTrue(content:find("showFactionDisconnectDialogAndExit(payloadErr)", 1, true) ~= nil, "invalid guest match_start should exit instead of entering gameplay")
+end)
+
 
 runTest("online_deploy_unit_near_hub_payload_includes_unit_index", function()
     local content = readFile("gameplay.lua")
@@ -1260,6 +1479,52 @@ runTest("online_surrender_is_sent_via_lockstep_command", function()
     assertTrue(guestApplied.payload and guestApplied.payload.command and guestApplied.payload.command.actionType == "surrender", "guest applied action must be surrender")
 end)
 
+runTest("remote_surrender_applies_on_propose_before_commit", function()
+    local guestSession = SteamOnlineSession.new({localUserId = "guest"})
+    guestSession.active = true
+    guestSession.sessionId = "surrender-fast-1"
+    guestSession.peerUserId = "host"
+
+    local guest = SteamLockstep.new({session = guestSession, validateCommand = function() return true end})
+    local sentPackets = {}
+    guest.sendPacket = function(_, packet)
+        sentPackets[#sentPackets + 1] = packet
+        return true
+    end
+
+    local command = {
+        actionType = "surrender",
+        params = {surrenderingPlayer = 1}
+    }
+
+    guest:injectPacket({
+        kind = "ACTION_PROPOSE",
+        sessionId = "surrender-fast-1",
+        seq = 4,
+        proposerId = "host",
+        commandId = "host:4",
+        command = command,
+        context = {turn = 6, phase = "turn", turnPhase = "actions", player = 1}
+    })
+
+    assertTrue(sentPackets[1] and sentPackets[1].kind == "ACTION_ACCEPT", "winner should still ACK remote surrender")
+    local applied = guest:pollEvent()
+    assertTrue(applied and applied.kind == "apply_command", "winner should apply surrender immediately on propose")
+    assertTrue(applied.payload and applied.payload.command and applied.payload.command.actionType == "surrender", "immediate event must carry surrender command")
+    assertTrue(applied.payload and applied.payload.source == "remote_immediate", "surrender should be marked as immediate remote apply")
+
+    guest:injectPacket({
+        kind = "ACTION_COMMIT",
+        sessionId = "surrender-fast-1",
+        seq = 4,
+        proposerId = "host",
+        commandId = "host:4",
+        command = command,
+        context = {turn = 6, phase = "turn", turnPhase = "actions", player = 1}
+    })
+    assertTrue(guest:pollEvent() == nil, "later surrender commit should not apply twice")
+end)
+
 runTest("remote_surrender_moves_host_to_gameover_without_waiting_timeout", function()
     local gameplayContent = readFile("gameplay.lua")
     local uiContent = readFile("uiClass.lua")
@@ -1334,12 +1599,46 @@ runTest("unit_action_arrow_hidden_when_attack_not_legal", function()
     assertTrue(content:find('if hasLegalActions then', 1, true) ~= nil, "unit helper arrow draw should be gated by legal actions")
 end)
 
-runTest("invite_accept_guest_auto_transitions_to_faction_select", function()
+runTest("invite_accept_guest_directly_transitions_to_faction_select", function()
+    local lobbyContent = readFile("onlineLobby.lua")
+    local stateMachineContent = readFile("stateMachine.lua")
+    assertTrue(type(lobbyContent) == "string", "onlineLobby.lua not readable")
+    assertTrue(type(stateMachineContent) == "string", "stateMachine.lua not readable")
+    assertTrue(stateMachineContent:find("runtimeOnline.pendingInviteJoinDirectToFaction = true", 1, true) ~= nil, "invite accept should mark direct faction transition")
+    assertTrue(lobbyContent:find("pendingInviteLobbyId, directInviteToFaction = consumePendingInviteJoinLobbyId()", 1, true) ~= nil, "invite join should consume direct faction flag")
+    assertTrue(lobbyContent:find("inviteJoinDirectFactionLobbyId = directInviteToFaction and tostring(pendingInviteLobbyId) or nil", 1, true) ~= nil, "invite join should retain direct faction lobby id")
+    assertTrue(lobbyContent:find('tryEnterFactionSelectFromInviteAccept("join_started")', 1, true) ~= nil, "synchronous invite join should enter faction directly")
+    assertTrue(lobbyContent:find('tryEnterFactionSelectFromInviteAccept("lobby_joined")', 1, true) ~= nil, "lobby_joined invite should enter faction directly")
+    assertTrue(lobbyContent:find('tryEnterFactionSelectFromInviteAccept("snapshot")', 1, true) ~= nil, "invite snapshot should enter faction directly")
+end)
+
+runTest("steam_launch_connect_lobby_routes_to_direct_faction_join", function()
+    local mainContent = readFile("main.lua")
+    local initializeContent = readFile("initialize.lua")
+    local lobbyContent = readFile("onlineLobby.lua")
+    assertTrue(type(mainContent) == "string", "main.lua not readable")
+    assertTrue(type(initializeContent) == "string", "initialize.lua not readable")
+    assertTrue(type(lobbyContent) == "string", "onlineLobby.lua not readable")
+    assertTrue(mainContent:find("queueSteamLaunchInvite", 1, true) ~= nil, "Steam launch invite parser missing")
+    assertTrue(mainContent:find("+connect_lobby", 1, true) ~= nil, "Steam launch invite should parse +connect_lobby")
+    assertTrue(mainContent:find("GAME.CURRENT.ONLINE.pendingInviteJoinDirectToFaction = true", 1, true) ~= nil, "Steam launch invite should enter direct faction flow")
+    assertTrue(initializeContent:find('stateMachine.changeState("onlineLobby")', 1, true) ~= nil, "Steam launch invite should route startup to online lobby")
+    assertTrue(lobbyContent:find("if onlineReady then\n            pendingInviteLobbyId, directInviteToFaction = consumePendingInviteJoinLobbyId()", 1, true) ~= nil, "launch invite should wait for Steam online readiness")
+end)
+
+runTest("invite_join_failed_clears_direct_faction_state", function()
     local content = readFile("onlineLobby.lua")
     assertTrue(type(content) == "string", "onlineLobby.lua not readable")
-    assertTrue(content:find('if handled == "lobby_joined" then', 1, true) ~= nil, "guest join transition event handling missing")
-    assertTrue(content:find("joinInFlight = false", 1, true) ~= nil, "joinInFlight should clear on lobby_joined")
-    assertTrue(content:find("enterFactionSelectOnline()", 1, true) ~= nil, "faction auto-transition call missing")
+    assertTrue(content:find('if handled == "lobby_join_failed" then\n                    joinInFlight = false\n                    inviteJoinDirectFactionLobbyId = nil', 1, true) ~= nil, "async invite join failure should clear direct faction state")
+end)
+
+runTest("online_faction_syncs_controller_personas_after_peer_join", function()
+    local content = readFile("factionSelect.lua")
+    assertTrue(type(content) == "string", "factionSelect.lua not readable")
+    assertTrue(content:find("syncOnlineControllerPersonas", 1, true) ~= nil, "online controller persona sync helper missing")
+    assertTrue(content:find("controller.nickname = desiredName", 1, true) ~= nil, "online controller nickname should be refreshed")
+    assertTrue(content:find("controller.metadata.steamId = desiredSteamId", 1, true) ~= nil, "online controller steam id should be refreshed")
+    assertTrue(content:find("syncOnlineControllerPersonas(session)", 1, true) ~= nil, "online sync loop should refresh controller personas")
 end)
 
 runTest("online_lobby_guest_does_not_get_disabled_dead_end_state", function()
@@ -1709,6 +2008,16 @@ runTest("online_prematch_exchange_includes_rating_profiles", function()
     assertTrue(factionContent:find("ensureLocalOnlineRatingProfileLoaded()", 1, true) ~= nil, "local online rating profile loader missing")
     assertTrue(factionContent:find("capturePeerOnlineRatingProfile(payload.ratingProfile)", 1, true) ~= nil, "peer rating profile capture missing")
     assertTrue(lockstepContent:find("ratingProfile = ratingProfile", 1, true) ~= nil, "prematch packets should carry rating profiles")
+end)
+
+runTest("rating_repair_notice_does_not_block_online_setup", function()
+    local factionContent = readFile("factionSelect.lua")
+    local lobbyContent = readFile("onlineLobby.lua")
+    assertTrue(type(factionContent) == "string", "factionSelect.lua not readable")
+    assertTrue(type(lobbyContent) == "string", "onlineLobby.lua not readable")
+    assertTrue(factionContent:find("consumeOnlineRatingRepairNotice(\"profile_load\")", 1, true) ~= nil, "faction setup should consume repair notice non-modally")
+    assertTrue(factionContent:find("ConfirmDialog.showMessage(repairNotice.text", 1, true) == nil, "rating repair must not show blocking faction setup dialog")
+    assertTrue(lobbyContent:find("consumeOnlineRatingRepairNotice(\"rating_seed\")", 1, true) ~= nil, "online lobby should consume rating repair notice before faction transition")
 end)
 
 runTest("online_gameplay_uses_glicko2_profile_update", function()

@@ -155,6 +155,9 @@ local function decodeValue(data, index)
             if keyErr then
                 return nil, index, keyErr
             end
+            if key == nil then
+                return nil, index, "invalid_table_key"
+            end
             local value, valueCursor, valueErr = decodeValue(data, nextCursor)
             if valueErr then
                 return nil, index, valueErr

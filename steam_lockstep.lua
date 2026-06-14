@@ -41,6 +41,10 @@ local function buildCommandId(proposerId, seq)
     return string.format("%s:%d", normalizedProposer, normalizeSequence(seq))
 end
 
+local function isSurrenderCommand(command)
+    return type(command) == "table" and command.actionType == "surrender"
+end
+
 local function normalizeCommandIdentity(identity, session, defaultProposer)
     local localUserId = resolveLocalUserId(session)
     local fallbackProposer = normalizeUserId(defaultProposer) or localUserId
@@ -101,6 +105,30 @@ local function resolveInboundIdentity(packet, netPacket, session, defaultPropose
     }
 end
 
+local function validateNetworkSession(packet, session)
+    local sessionId = session and session.sessionId or nil
+    if packet and packet.sessionId and sessionId and packet.sessionId ~= sessionId then
+        return false, "session_mismatch"
+    end
+    return true
+end
+
+local function validateNetworkPeer(netPacket, session)
+    if not session then
+        return true
+    end
+
+    local packetPeerId = normalizeUserId(netPacket and netPacket.peerId)
+    local expectedPeerId = normalizeUserId(session.peerUserId)
+    if not packetPeerId or not expectedPeerId then
+        return false, "peer_missing"
+    end
+    if packetPeerId ~= expectedPeerId then
+        return false, "unexpected_peer"
+    end
+    return true
+end
+
 function lockstep.new(params)
     params = params or {}
     local self = setmetatable({}, lockstep)
@@ -116,6 +144,7 @@ function lockstep.new(params)
     self.pendingOutbound = {}
     self.pendingInbound = {}
     self.pendingStateHash = {}
+    self.appliedCommandIds = {}
 
     self.lastLocalStateHash = nil
     self.lastRemoteStateHash = nil
@@ -138,6 +167,7 @@ function lockstep:reset()
     self.pendingOutbound = {}
     self.pendingInbound = {}
     self.pendingStateHash = {}
+    self.appliedCommandIds = {}
     self.lastLocalStateHash = nil
     self.lastRemoteStateHash = nil
     self.drawProposal = nil
@@ -157,6 +187,23 @@ end
 
 function lockstep:emit(kind, payload)
     self.events[#self.events + 1] = newEvent(kind, payload)
+end
+
+function lockstep:validateInboundCommand(command, context)
+    if type(self.validateCommand) ~= "function" then
+        return true
+    end
+
+    local ok, validOrErr = pcall(self.validateCommand, command, context)
+    if not ok then
+        self:emit("protocol_error", {
+            reason = "command_validate_error",
+            detail = tostring(validOrErr)
+        })
+        return false
+    end
+
+    return validOrErr ~= false
 end
 
 function lockstep:pollEvent()
@@ -190,19 +237,36 @@ end
 
 function lockstep:pollNetwork()
     local packets = steamRuntime.pollNet(64)
+    if type(packets) ~= "table" then
+        return
+    end
     for _, netPacket in ipairs(packets) do
-        if self.session and type(self.session.notePeerTraffic) == "function" then
-            self.session:notePeerTraffic(netPacket.peerId)
-        end
-
-        local decoded, err = codec.decode(netPacket.payload, self.protocolVersion)
-        if decoded then
-            self:handlePacket(decoded, netPacket)
-        else
+        local ok, decoded, err = pcall(codec.decode, netPacket.payload, self.protocolVersion)
+        if not ok then
             self:emit("protocol_error", {
-                reason = err,
+                reason = "decode_runtime_error",
+                detail = tostring(decoded),
                 packet = netPacket
             })
+        elseif not decoded then
+            self:emit("protocol_error", {
+                reason = err or "decode_failed",
+                packet = netPacket
+            })
+        else
+            local validSession, sessionErr = validateNetworkSession(decoded, self.session)
+            local validPeer, peerErr = validateNetworkPeer(netPacket, self.session)
+            if validSession and validPeer then
+                if self.session and type(self.session.notePeerTraffic) == "function" then
+                    self.session:notePeerTraffic(netPacket.peerId)
+                end
+                self:handlePacket(decoded, netPacket)
+            else
+                self:emit("protocol_error", {
+                    reason = sessionErr or peerErr or "packet_rejected",
+                    packet = netPacket
+                })
+            end
         end
     end
 end
@@ -296,6 +360,7 @@ function lockstep:commitAction(identity)
         context = pending.context,
         source = "local"
     })
+    self.appliedCommandIds[pending.commandId] = true
 
     return true
 end
@@ -337,6 +402,7 @@ function lockstep:proposeDraw(turn)
 
     local ok, err = self:sendPacket({
         kind = "DRAW_PROPOSE",
+        sessionId = self.session and self.session.sessionId or nil,
         turn = turn
     }, self.controlChannel)
 
@@ -358,6 +424,7 @@ function lockstep:voteDraw(accept)
 
     local ok, err = self:sendPacket({
         kind = "DRAW_VOTE",
+        sessionId = self.session and self.session.sessionId or nil,
         accept = accept == true
     }, self.controlChannel)
     if not ok then
@@ -539,10 +606,7 @@ end
 function lockstep:handleActionPropose(packet, netPacket)
     local identity = resolveInboundIdentity(packet, netPacket, self.session)
 
-    local valid = true
-    if type(self.validateCommand) == "function" then
-        valid = self.validateCommand(packet.command, packet.context) ~= false
-    end
+    local valid = self:validateInboundCommand(packet.command, packet.context)
 
     if not valid then
         self:sendPacket({
@@ -571,6 +635,19 @@ function lockstep:handleActionPropose(packet, netPacket)
         proposerId = identity.proposerId,
         commandId = identity.commandId
     }, self.actionChannel)
+
+    if isSurrenderCommand(packet.command) and not self.appliedCommandIds[identity.commandId] then
+        self.appliedCommandIds[identity.commandId] = true
+        self.pendingInbound[identity.commandId] = nil
+        self:emit("apply_command", {
+            seq = identity.seq,
+            proposerId = identity.proposerId,
+            commandId = identity.commandId,
+            command = packet.command,
+            context = packet.context,
+            source = "remote_immediate"
+        })
+    end
 end
 
 function lockstep:handleActionAccept(packet, netPacket)
@@ -594,12 +671,14 @@ end
 
 function lockstep:handleActionCommit(packet, netPacket)
     local identity = resolveInboundIdentity(packet, netPacket, self.session)
+    if self.appliedCommandIds[identity.commandId] then
+        self.pendingInbound[identity.commandId] = nil
+        return
+    end
+
     local inbound = self.pendingInbound[identity.commandId]
     if not inbound then
-        local valid = true
-        if type(self.validateCommand) == "function" then
-            valid = self.validateCommand(packet.command, packet.context) ~= false
-        end
+        local valid = self:validateInboundCommand(packet.command, packet.context)
         if not valid then
             return
         end
@@ -614,6 +693,7 @@ function lockstep:handleActionCommit(packet, netPacket)
     end
 
     self.appliedSequence = math.max(self.appliedSequence, inbound.seq or identity.seq)
+    self.appliedCommandIds[identity.commandId] = true
 
     self:emit("apply_command", {
         seq = inbound.seq or identity.seq,

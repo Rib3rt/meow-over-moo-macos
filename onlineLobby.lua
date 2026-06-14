@@ -29,7 +29,9 @@ local lastLobbyRefreshAt = 0
 local refreshInFlight = false
 local joinInFlight = false
 local createInFlight = false
+local inviteJoinDirectFactionLobbyId = nil
 local lastOnlineReady = nil
+local consumeOnlineRatingRepairNotice = nil
 
 local scrollbarDragging = false
 local scrollbarDragAnchorY = 0
@@ -37,7 +39,6 @@ local scrollbarDragAnchorOffset = 0
 
 local AUTO_LOBBY_REFRESH_SEC = 3
 local ELO_REFRESH_INTERVAL_SEC = 5
-local INVITE_WAIT_OVERLAY_DELAY_SEC = 8
 local lobbyOwnerEloBySteamId = {}
 local lastEloRefreshAt = 0
 
@@ -45,6 +46,9 @@ local function resolveStoredOnlineRatingSeed(defaultRating)
     local fallback = tonumber(defaultRating) or 1200
     if onlineRatingStore and type(onlineRatingStore.loadProfile) == "function" then
         local profile = onlineRatingStore.loadProfile()
+        if consumeOnlineRatingRepairNotice then
+            consumeOnlineRatingRepairNotice("rating_seed")
+        end
         if type(profile) == "table" and tonumber(profile.rating) ~= nil then
             return math.floor((tonumber(profile.rating) or fallback) + 0.5)
         end
@@ -59,15 +63,7 @@ local lastHoveredButtonIndex = nil
 local lobbyEnterAt = 0
 local ENTRY_ACTIVATION_GUARD_SEC = 0.18
 local peerTransitionEligibleSince = nil
-local inviteWaitStartedAt = nil
-local inviteWaitVisible = false
 local updateButtonStates
-local inviteWaitEligible = false
-local inviteWaitFocusIndex = 1
-local inviteWaitButtons = {
-    keep = nil,
-    cancel = nil
-}
 
 local BUTTON_BEEP_SOUND_PATH = "assets/audio/GenericButton14.wav"
 local BUTTON_CLICK_SOUND_PATH = "assets/audio/GenericButton6.wav"
@@ -98,6 +94,21 @@ local function lobbyLog(message)
     print("[OnlineLobby] " .. tostring(message))
 end
 
+consumeOnlineRatingRepairNotice = function(context)
+    if not onlineRatingStore or type(onlineRatingStore.consumeRepairNotice) ~= "function" then
+        return
+    end
+
+    local repairNotice = onlineRatingStore.consumeRepairNotice()
+    if repairNotice then
+        lobbyLog(string.format(
+            "Rating profile repaired during %s: %s",
+            tostring(context or "online_lobby"),
+            tostring(repairNotice.text or repairNotice.title or "repair_complete")
+        ))
+    end
+end
+
 local function setStatusBar(text, severity)
     statusBarText = tostring(text or "")
     statusBarSeverity = severity or "info"
@@ -116,15 +127,6 @@ local function getStatusBarColor()
     return 0.72, 0.74, 0.78, 0.95
 end
 
-local function clearInviteWaitState()
-    inviteWaitStartedAt = nil
-    inviteWaitVisible = false
-    inviteWaitEligible = false
-    inviteWaitFocusIndex = 1
-    inviteWaitButtons.keep = nil
-    inviteWaitButtons.cancel = nil
-end
-
 local function hasConnectedPeer()
     if not session then
         return false
@@ -136,122 +138,6 @@ local function hasConnectedPeer()
         return false
     end
     return tostring(session.peerUserId) ~= tostring(session.localUserId)
-end
-
-local function armInviteWaitOverlay()
-    inviteWaitStartedAt = nowSeconds()
-    inviteWaitVisible = false
-    inviteWaitEligible = true
-    inviteWaitFocusIndex = 1
-end
-
-local function cancelInviteWaitAndCloseHostLobby()
-    inviteWaitVisible = false
-    inviteWaitEligible = false
-
-    if session and session.active and session.role == "host" then
-        session:leave()
-    end
-
-    joinInFlight = false
-    createInFlight = false
-    ratingsFetchKey = nil
-    setStatusBar("Invite canceled. Lobby closed.", "warn")
-    refreshLobbyList("invite_cancel")
-end
-
-local function handleInviteWaitDecision(keepWaiting)
-    if keepWaiting then
-        inviteWaitVisible = false
-        inviteWaitEligible = false
-        setStatusBar("Still waiting for opponent...", "info")
-        return
-    end
-
-    cancelInviteWaitAndCloseHostLobby()
-end
-
-local function isMouseOverInviteWaitButton(button, x, y)
-    if not button then
-        return false
-    end
-    return x >= button.x and x <= button.x + button.width and y >= button.y and y <= button.y + button.height
-end
-
-local function updateInviteWaitHover(tx, ty)
-    local hoveredIndex = nil
-    if isMouseOverInviteWaitButton(inviteWaitButtons.keep, tx, ty) then
-        hoveredIndex = 1
-    elseif isMouseOverInviteWaitButton(inviteWaitButtons.cancel, tx, ty) then
-        hoveredIndex = 2
-    end
-
-    if hoveredIndex and hoveredIndex ~= inviteWaitFocusIndex then
-        inviteWaitFocusIndex = hoveredIndex
-        playHoverSound()
-    end
-end
-
-local function handleInviteWaitMousePressed(tx, ty)
-    if isMouseOverInviteWaitButton(inviteWaitButtons.keep, tx, ty) then
-        playClickSound()
-        handleInviteWaitDecision(true)
-        return true
-    end
-    if isMouseOverInviteWaitButton(inviteWaitButtons.cancel, tx, ty) then
-        playClickSound()
-        handleInviteWaitDecision(false)
-        return true
-    end
-    return true
-end
-
-local function handleInviteWaitKeyPressed(key)
-    if key == "left" or key == "a" then
-        inviteWaitFocusIndex = 1
-        playHoverSound()
-        return true
-    end
-    if key == "right" or key == "d" then
-        inviteWaitFocusIndex = 2
-        playHoverSound()
-        return true
-    end
-    if key == "return" or key == "space" then
-        playClickSound()
-        handleInviteWaitDecision(inviteWaitFocusIndex == 1)
-        return true
-    end
-    if key == "escape" then
-        playClickSound()
-        handleInviteWaitDecision(false)
-        return true
-    end
-    return true
-end
-
-local function handleInviteWaitGamepadPressed(button)
-    if button == "a" then
-        playClickSound()
-        handleInviteWaitDecision(inviteWaitFocusIndex == 1)
-        return true
-    end
-    if button == "b" or button == "back" then
-        playClickSound()
-        handleInviteWaitDecision(false)
-        return true
-    end
-    if button == "dpleft" or button == "leftshoulder" then
-        inviteWaitFocusIndex = 1
-        playHoverSound()
-        return true
-    end
-    if button == "dpright" or button == "rightshoulder" then
-        inviteWaitFocusIndex = 2
-        playHoverSound()
-        return true
-    end
-    return true
 end
 
 local function initAudio()
@@ -291,14 +177,35 @@ local function clearOnlineRuntimeState(reasonCode)
     online.lockstep = nil
     online.autoJoinLobbyId = nil
     online.pendingInviteJoinLobbyId = nil
+    online.pendingInviteJoinDirectToFaction = nil
     online.pendingInvitePrompt = nil
     online.lastInvitePromptKey = nil
     online.lastInvitePromptAt = 0
+    online.inviteWaitStartedAt = nil
+    online.inviteWaitPromptShown = nil
+    online.inviteArrivalNoticePending = nil
+    online.inviteArrivalNoticeShown = nil
     online.pendingLobbyEvents = {}
     online.eloSummary = nil
     if reasonCode then
         online.resultCode = reasonCode
     end
+end
+
+local function clearOnlineInviteWaitPromptState()
+    local online = ensureOnlineRuntimeState()
+    online.inviteWaitStartedAt = nil
+    online.inviteWaitPromptShown = nil
+    online.inviteArrivalNoticePending = nil
+    online.inviteArrivalNoticeShown = nil
+end
+
+local function armOnlineInviteWaitPrompt()
+    local online = ensureOnlineRuntimeState()
+    online.inviteWaitStartedAt = nowSeconds()
+    online.inviteWaitPromptShown = false
+    online.inviteArrivalNoticePending = true
+    online.inviteArrivalNoticeShown = false
 end
 
 local function consumePendingLobbyEvents(maxEvents)
@@ -324,11 +231,13 @@ end
 local function consumePendingInviteJoinLobbyId()
     local online = ensureOnlineRuntimeState()
     local lobbyId = online.pendingInviteJoinLobbyId
+    local directToFaction = online.pendingInviteJoinDirectToFaction == true
     online.pendingInviteJoinLobbyId = nil
+    online.pendingInviteJoinDirectToFaction = nil
     if lobbyId == nil then
-        return nil
+        return nil, false
     end
-    return tostring(lobbyId)
+    return tostring(lobbyId), directToFaction
 end
 
 local function getListRect()
@@ -1069,6 +978,28 @@ local function enterFactionSelectOnline()
     stateMachineRef.changeState("factionSelect")
 end
 
+local function tryEnterFactionSelectFromInviteAccept(reason)
+    if not inviteJoinDirectFactionLobbyId then
+        return false
+    end
+    if not session or not session.active or session.role ~= "guest" then
+        return false
+    end
+    if session.lobbyId and tostring(session.lobbyId) ~= tostring(inviteJoinDirectFactionLobbyId) then
+        inviteJoinDirectFactionLobbyId = nil
+        return false
+    end
+    if not hasConnectedPeer() then
+        return false
+    end
+
+    lobbyLog("Invite accept direct faction transition: " .. tostring(reason or "ready"))
+    inviteJoinDirectFactionLobbyId = nil
+    setStatusBar("Invite accepted. Entering faction setup...", "ok")
+    enterFactionSelectOnline()
+    return true
+end
+
 local function refreshLobbyRatings()
     if not session or not session.active or not session.connected or not session.peerUserId then
         ratingsFetchKey = nil
@@ -1149,7 +1080,6 @@ end
 
 local function terminateOnlineAndReturnToMenu(reasonCode)
     lobbyLog("Terminating online session: " .. tostring(reasonCode or "unknown"))
-    clearInviteWaitState()
     if session then
         session:leave()
     end
@@ -1291,11 +1221,12 @@ local function onInviteFriend()
     local overlayOk = steamRuntime.onGuideButtonPressed()
     lobbyLog("Invite overlay trigger: " .. tostring(overlayOk))
     if overlayOk then
-        setStatusBar("Invite overlay opened.", "ok")
-        armInviteWaitOverlay()
+        armOnlineInviteWaitPrompt()
+        setStatusBar("Invite overlay opened. Choose factions while waiting...", "ok")
+        enterFactionSelectOnline()
     else
         setStatusBar("Unable to open invite overlay.", "warn")
-        clearInviteWaitState()
+        clearOnlineInviteWaitPromptState()
     end
 end
 
@@ -1350,6 +1281,7 @@ function onlineLobby.enter(stateMachine)
     refreshInFlight = false
     joinInFlight = false
     createInFlight = false
+    inviteJoinDirectFactionLobbyId = nil
     lastLobbyRefreshAt = 0
     lastOnlineReady = nil
     scrollbarDragging = false
@@ -1363,7 +1295,6 @@ function onlineLobby.enter(stateMachine)
     lastTransitionGateLogAt = 0
     lastHoveredButtonIndex = nil
     peerTransitionEligibleSince = nil
-    clearInviteWaitState()
     lobbyEnterAt = nowSeconds()
 
     session = GAME.CURRENT.ONLINE and GAME.CURRENT.ONLINE.session or SteamOnlineSession.new()
@@ -1389,7 +1320,6 @@ end
 function onlineLobby.exit()
     stateMachineRef = nil
     scrollbarDragging = false
-    clearInviteWaitState()
 end
 
 function onlineLobby.update(dt)
@@ -1418,8 +1348,12 @@ function onlineLobby.update(dt)
 
     if session then
         syncSessionRole()
-        local pendingInviteLobbyId = consumePendingInviteJoinLobbyId()
+        local pendingInviteLobbyId, directInviteToFaction
+        if onlineReady then
+            pendingInviteLobbyId, directInviteToFaction = consumePendingInviteJoinLobbyId()
+        end
         if pendingInviteLobbyId then
+            inviteJoinDirectFactionLobbyId = directInviteToFaction and tostring(pendingInviteLobbyId) or nil
             if session.active then
                 lobbyLog("Invite accepted: leaving current lobby before joining invited lobby")
                 session:leave()
@@ -1430,10 +1364,14 @@ function onlineLobby.update(dt)
             local joined, joinErr = session:joinLobby(pendingInviteLobbyId)
             if not joined then
                 joinInFlight = false
+                inviteJoinDirectFactionLobbyId = nil
                 lobbyLog("Invite join failed: " .. tostring(joinErr))
                 setStatusBar("Join from invite failed.", "error")
             else
                 lobbyLog("Invite join started")
+                if tryEnterFactionSelectFromInviteAccept("join_started") then
+                    return
+                end
             end
         end
 
@@ -1444,10 +1382,14 @@ function onlineLobby.update(dt)
                 lobbyLog("Lobby event handled: " .. tostring(handled))
                 if handled == "lobby_join_failed" then
                     joinInFlight = false
+                    inviteJoinDirectFactionLobbyId = nil
                     setStatusBar("Lobby join was rejected or failed.", "error")
                 elseif handled == "lobby_joined" then
                     joinInFlight = false
                     setStatusBar("Lobby joined. Sync in progress...", "ok")
+                    if tryEnterFactionSelectFromInviteAccept("lobby_joined") then
+                        return
+                    end
                 elseif handled == "lobby_created" then
                     setStatusBar("Lobby created. Waiting for peer...", "ok")
                 end
@@ -1459,6 +1401,9 @@ function onlineLobby.update(dt)
             if snapshot then
                 session:applyLobbySnapshot(snapshot)
                 currentLobbySnapshot = snapshot
+                if tryEnterFactionSelectFromInviteAccept("snapshot") then
+                    return
+                end
             end
 
             refreshLobbyRatings()
@@ -1473,6 +1418,7 @@ function onlineLobby.update(dt)
                 createInFlight = false
             end
 
+            local resolvedRole = syncSessionRole() or session.role
             local hasValidPeer = session.connected == true and session.peerUserId and tostring(session.peerUserId) ~= tostring(session.localUserId)
             if hasValidPeer then
                 peerTransitionEligibleSince = peerTransitionEligibleSince or nowSeconds()
@@ -1533,22 +1479,6 @@ function onlineLobby.update(dt)
         end
     end
 
-    if inviteWaitEligible then
-        local waitingStillValid = session and session.active and session.role == "host" and session.lobbyId and not hasConnectedPeer()
-        if not waitingStillValid then
-            clearInviteWaitState()
-        elseif not inviteWaitVisible and not ConfirmDialog.isActive() and inviteWaitStartedAt then
-            local waitElapsed = nowSeconds() - inviteWaitStartedAt
-            if waitElapsed >= INVITE_WAIT_OVERLAY_DELAY_SEC then
-                inviteWaitVisible = true
-                inviteWaitFocusIndex = 1
-                setStatusBar("Still waiting for opponent...", "warn")
-            end
-        end
-    elseif inviteWaitVisible and hasConnectedPeer() then
-        clearInviteWaitState()
-    end
-
     if onlineReady and session and (not session.active) then
         local elapsed = nowSeconds() - (lastLobbyRefreshAt or 0)
         if elapsed >= AUTO_LOBBY_REFRESH_SEC then
@@ -1560,67 +1490,6 @@ function onlineLobby.update(dt)
     GAME.CURRENT.ONLINE.role = session and (syncSessionRole() or session.role) or nil
     clampSelectedLobbyIndex()
     updateButtonStates()
-end
-
-local function drawInviteWaitOverlay()
-    if not inviteWaitVisible then
-        inviteWaitButtons.keep = nil
-        inviteWaitButtons.cancel = nil
-        return
-    end
-
-    local panelWidth = 560
-    local panelHeight = 220
-    local panelX = math.floor((SETTINGS.DISPLAY.WIDTH - panelWidth) / 2)
-    local panelY = math.floor((SETTINGS.DISPLAY.HEIGHT - panelHeight) / 2)
-
-    love.graphics.setColor(0, 0, 0, 0.55)
-    love.graphics.rectangle("fill", 0, 0, SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT)
-    uiTheme.drawTechPanel(panelX, panelY, panelWidth, panelHeight)
-    uiTheme.drawTitle("Waiting for Opponent", panelX, panelY + 18, panelWidth)
-
-    love.graphics.setColor(0.92, 0.9, 0.84, 0.96)
-    love.graphics.printf(
-        "Invite sent. Your opponent has not joined yet.",
-        panelX + 18,
-        panelY + 86,
-        panelWidth - 36,
-        "center"
-    )
-
-    local buttonWidth = 180
-    local buttonHeight = 48
-    local gap = 20
-    local rowWidth = buttonWidth * 2 + gap
-    local startX = panelX + math.floor((panelWidth - rowWidth) / 2)
-    local y = panelY + panelHeight - buttonHeight - 24
-
-    inviteWaitButtons.keep = {
-        x = startX,
-        y = y,
-        width = buttonWidth,
-        height = buttonHeight,
-        text = "Keep Waiting",
-        focused = inviteWaitFocusIndex == 1,
-        enabled = true
-    }
-    inviteWaitButtons.cancel = {
-        x = startX + buttonWidth + gap,
-        y = y,
-        width = buttonWidth,
-        height = buttonHeight,
-        text = "Cancel Invite",
-        focused = inviteWaitFocusIndex == 2,
-        enabled = true
-    }
-
-    uiTheme.applyButtonVariant(inviteWaitButtons.keep, "default")
-    uiTheme.applyButtonVariant(inviteWaitButtons.cancel, "danger")
-    inviteWaitButtons.keep.currentColor = inviteWaitButtons.keep.focused and inviteWaitButtons.keep.hoverColor or inviteWaitButtons.keep.baseColor
-    inviteWaitButtons.cancel.currentColor = inviteWaitButtons.cancel.focused and inviteWaitButtons.cancel.hoverColor or inviteWaitButtons.cancel.baseColor
-
-    uiTheme.drawButton(inviteWaitButtons.keep)
-    uiTheme.drawButton(inviteWaitButtons.cancel)
 end
 
 function onlineLobby.draw()
@@ -1710,8 +1579,6 @@ function onlineLobby.draw()
         uiTheme.drawButton(button)
     end
 
-    drawInviteWaitOverlay()
-
     if ConfirmDialog and ConfirmDialog.draw then
         ConfirmDialog.draw()
     end
@@ -1720,13 +1587,6 @@ function onlineLobby.draw()
 end
 
 function onlineLobby.mousemoved(x, y, dx, dy, istouch)
-    if inviteWaitVisible then
-        local tx = (x - SETTINGS.DISPLAY.OFFSETX) / SETTINGS.DISPLAY.SCALE
-        local ty = (y - SETTINGS.DISPLAY.OFFSETY) / SETTINGS.DISPLAY.SCALE
-        updateInviteWaitHover(tx, ty)
-        return
-    end
-
     if ConfirmDialog.isActive() then
         ConfirmDialog.mousemoved(x, y)
         return
@@ -1767,12 +1627,6 @@ end
 function onlineLobby.mousepressed(x, y, button, istouch, presses)
     if button ~= 1 then
         return
-    end
-
-    if inviteWaitVisible then
-        local tx = (x - SETTINGS.DISPLAY.OFFSETX) / SETTINGS.DISPLAY.SCALE
-        local ty = (y - SETTINGS.DISPLAY.OFFSETY) / SETTINGS.DISPLAY.SCALE
-        return handleInviteWaitMousePressed(tx, ty)
     end
 
     if ConfirmDialog.isActive() then
@@ -1828,10 +1682,6 @@ function onlineLobby.mousepressed(x, y, button, istouch, presses)
 end
 
 function onlineLobby.mousereleased(x, y, button, istouch, presses)
-    if inviteWaitVisible then
-        return
-    end
-
     if ConfirmDialog.isActive() then
         return ConfirmDialog.mousereleased(x, y, button)
     end
@@ -1841,10 +1691,6 @@ function onlineLobby.mousereleased(x, y, button, istouch, presses)
 end
 
 function onlineLobby.wheelmoved(dx, dy)
-    if inviteWaitVisible then
-        return
-    end
-
     if ConfirmDialog.isActive() then
         return
     end
@@ -1856,10 +1702,6 @@ function onlineLobby.wheelmoved(dx, dy)
 end
 
 function onlineLobby.keypressed(key, scancode, isrepeat)
-    if inviteWaitVisible then
-        return handleInviteWaitKeyPressed(key)
-    end
-
     if ConfirmDialog.isActive() then
         return ConfirmDialog.keypressed(key)
     end
@@ -1971,10 +1813,6 @@ function onlineLobby.keypressed(key, scancode, isrepeat)
 end
 
 function onlineLobby.gamepadpressed(joystick, button)
-    if inviteWaitVisible then
-        return handleInviteWaitGamepadPressed(button)
-    end
-
     if button == "a" then
         return onlineLobby.keypressed("return", "return", false)
     end

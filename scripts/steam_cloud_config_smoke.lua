@@ -37,8 +37,4 @@ local windowsPackager = readFile("scripts/build_fused_windows_package.py")
 assertContains(windowsPackager, "subdirectory MeowOverMoo", "windows package upload instructions")
 assertNotContains(windowsPackager, "subdirectory LOVE/MeowOverMoo", "windows package upload instructions")
 
-local macPackager = readFile("scripts/build_native_macos_package.py")
-assertContains(macPackager, "subdirectory MeowOverMoo", "mac package upload instructions")
-assertNotContains(macPackager, "subdirectory LOVE/MeowOverMoo", "mac package upload instructions")
-
 print("steam_cloud_config_smoke: OK")

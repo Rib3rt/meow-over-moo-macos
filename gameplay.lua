@@ -1873,6 +1873,7 @@ local function processOnlineLockstepEvents(dt)
             onlineHeartbeatElapsed = 0
             onlineLockstep:sendPacket({
                 kind = "HEARTBEAT",
+                sessionId = onlineSession and onlineSession.sessionId or nil,
                 timestamp = love.timer.getTime()
             }, SETTINGS.STEAM_ONLINE.PACKET_CHANNEL_CONTROL or 2)
         end
@@ -2610,7 +2611,8 @@ local function getUnitCodexLayoutMetrics()
     local screenWidth = baseWidth
     local screenHeight = baseHeight
     local scale = tonumber(SETTINGS.DISPLAY.SCALE) or 1
-    if love and love.graphics and love.graphics.getDimensions and scale > 0 then
+    local isIOSBuild = PLATFORM_BUILD_LABEL and tostring(PLATFORM_BUILD_LABEL):lower():find("ios", 1, true) ~= nil
+    if love and love.graphics and love.graphics.getDimensions and scale > 0 and not isIOSBuild then
         local windowWidth, windowHeight = love.graphics.getDimensions()
         screenWidth = math.max(baseWidth, math.floor((windowWidth / scale) + 0.5))
         screenHeight = math.max(baseHeight, math.floor((windowHeight / scale) + 0.5))
@@ -2653,6 +2655,7 @@ local function buildUnitCodexGridCache(factionId, layout, counts)
     end
 
     local canvas = love.graphics.newCanvas(layout.totalGridWidth, layout.totalGridHeight)
+    require("rendering_quality").applyCanvasFilter(canvas)
     local cards = {}
 
     love.graphics.push("all")
