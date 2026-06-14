@@ -204,6 +204,9 @@ public:
 private:
     bool initialized_ = false;
     bool debugLogs_ = false;
+    mutable bool userStatsReady_ = false;
+    mutable bool userStatsRequestInFlight_ = false;
+    mutable std::string userStatsLastReason_;
     bool remotePlayDirectInputEnabled_ = false;
     bool remotePlayCursorAssetsReady_ = false;
     RemotePlayCursorID_t remotePlayHiddenCursorId_ = 0;
@@ -230,6 +233,8 @@ private:
     CCallback<SteamBridge, SteamNetworkingMessagesSessionFailed_t> callbackNetworkingSessionFailed_;
 
     bool requireInitialized(std::string& reason) const;
+    bool requestCurrentStats(std::string& reason, int timeoutMs = 4000) const;
+    bool ensureUserStatsReady(std::string& reason, int timeoutMs = 4000) const;
     bool ensureSteamInputConfigured(std::string& reason) const;
     bool ensureRemotePlayCursorAssets(std::string& reason);
     RemotePlayCursorID_t resolveRemotePlayVisibleCursorId(uint32_t sessionId) const;
