@@ -96,6 +96,16 @@ def is_external_runtime_file(path: Path, source_root: Path) -> bool:
     return False
 
 
+def is_windows_package_source_file(path: Path, source_root: Path) -> bool:
+    rel = path.relative_to(source_root).as_posix()
+    if rel.startswith("integrations/steam/redist/"):
+        return rel in {
+            "integrations/steam/redist/win64/steam_bridge_native.dll",
+            "integrations/steam/redist/win64/steam_api64.dll",
+        }
+    return True
+
+
 def pick_target_folder(parent: Path, base_name: str) -> Path:
     candidate = parent / base_name
     if not candidate.exists():
@@ -130,6 +140,7 @@ def validate_prep_folder(prep_root: Path) -> tuple[Path, Path]:
 
 def collect_source_file_sets(source_root: Path) -> tuple[set[Path], set[Path]]:
     runtime_files, _ = collect_release_files(source_root)
+    runtime_files = {p for p in runtime_files if is_windows_package_source_file(p, source_root)}
     beside_files = {p for p in runtime_files if is_external_runtime_file(p, source_root)}
     inside_files = runtime_files - beside_files
     return inside_files, beside_files
@@ -381,7 +392,7 @@ def build_upload_instructions(package_root: Path, zip_path: Path | None) -> str:
             "- integrations/steam/redist/win64/",
             "",
             "Steam Cloud Auto-Cloud setup for cross-platform scenario stats:",
-            "- Use root WinAppDataRoaming, subdirectory LOVE/MeowOverMoo, OS All OSes.",
+            "- Use root WinAppDataRoaming, subdirectory MeowOverMoo, OS All OSes.",
             "- Add file patterns OnlineRatingProfile.dat and ScenarioProgress.dat.",
             "- Add Root Override for macOS: New root MacAppSupport, Replace path LOVE/MeowOverMoo.",
             "- Add Root Override for Linux: New root LinuxXdgDataHome, Replace path love/MeowOverMoo.",

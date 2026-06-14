@@ -41,6 +41,7 @@ local dialog = {
             width = 150,
             height = 40,
             text = "Yes",
+            centerText = true,
             currentColor = UI_COLORS.button,
             hoverColor = UI_COLORS.buttonHover,
             pressedColor = UI_COLORS.buttonPressed
@@ -49,6 +50,7 @@ local dialog = {
             width = 150,
             height = 40,
             text = "No",
+            centerText = true,
             currentColor = UI_COLORS.button,
             hoverColor = UI_COLORS.buttonHover,
             pressedColor = UI_COLORS.buttonPressed
@@ -171,6 +173,12 @@ local function playDialogAppearSound()
     })
 end
 
+local function invokeDialogCallback(callback)
+    if type(callback) == "function" then
+        callback()
+    end
+end
+
 -- Show the confirmation dialog with a message and callback functions
 function confirmDialog.show(messageText, confirmCallback, cancelCallback, options)
     initAudio() -- Initialize audio when showing dialog
@@ -197,10 +205,12 @@ function confirmDialog.show(messageText, confirmCallback, cancelCallback, option
 
     dialog.buttons.confirm.text = confirmText
     dialog.buttons.cancel.text = cancelText
+    dialog.buttons.confirm.centerText = true
+    dialog.buttons.cancel.centerText = true
+    dialog.buttons.confirm.textOffsetY = nil
+    dialog.buttons.cancel.textOffsetY = nil
     uiTheme.applyButtonVariant(dialog.buttons.confirm, "default")
     uiTheme.applyButtonVariant(dialog.buttons.cancel, "default")
-    dialog.buttons.confirm.textOffsetY = dialog.buttons.confirm.textOffsetY or (dialog.buttons.confirm.height / 2 - 10)
-    dialog.buttons.cancel.textOffsetY = dialog.buttons.cancel.textOffsetY or (dialog.buttons.cancel.height / 2 - 10)
     if requestedWidth and requestedWidth > 0 then
         dialog.width = math.floor(requestedWidth)
     else
@@ -261,7 +271,25 @@ function confirmDialog.show(messageText, confirmCallback, cancelCallback, option
 end
 
 function confirmDialog.showMessage(messageText, acknowledgeCallback, options)
-    options = options or {}
+    if type(acknowledgeCallback) == "table" and options == nil then
+        options = acknowledgeCallback
+        acknowledgeCallback = nil
+    else
+        options = options or {}
+    end
+
+    if type(acknowledgeCallback) == "string" then
+        if options.message == nil then
+            options.message = acknowledgeCallback
+        end
+        if options.title == nil then
+            options.title = tostring(messageText or "Notice")
+        end
+        acknowledgeCallback = nil
+    elseif type(acknowledgeCallback) ~= "function" then
+        acknowledgeCallback = nil
+    end
+
     options.singleButton = true
     options.confirmText = tostring(options.confirmText or "OK")
     options.defaultFocus = "confirm"
@@ -275,15 +303,22 @@ function confirmDialog.hide(confirmed)
     isVisible = false
     resetTransientInputs("confirm_dialog_hide")
     if confirmed and onConfirm then
-        onConfirm()
+        invokeDialogCallback(onConfirm)
     elseif not confirmed and onCancel then
-        onCancel()
+        invokeDialogCallback(onCancel)
     end
 end
 
 -- Check if dialog is currently visible
 function confirmDialog.isActive()
     return isVisible
+end
+
+function confirmDialog.getTitle()
+    if not isVisible then
+        return nil
+    end
+    return dialogTitle
 end
 
 function confirmDialog.draw()
@@ -540,7 +575,7 @@ function confirmDialog.keypressed(key)
             local confirmCallback = onConfirm
             isVisible = false
             if confirmCallback then
-                confirmCallback()
+                invokeDialogCallback(confirmCallback)
             end
             return true
         end
@@ -561,11 +596,11 @@ function confirmDialog.keypressed(key)
         -- Execute the callback after hiding dialog
         if focusedButton == "confirm" then
             if confirmCallback then
-                confirmCallback()
+                invokeDialogCallback(confirmCallback)
             end
         else
             if cancelCallback then
-                cancelCallback()
+                invokeDialogCallback(cancelCallback)
             end
         end
         
@@ -579,7 +614,7 @@ function confirmDialog.keypressed(key)
         
         -- Execute callback after hiding dialog
         if cancelCallback then
-            cancelCallback()
+            invokeDialogCallback(cancelCallback)
         end
         return true
     elseif key == "left" or key == "a" or key == "right" or key == "d" or key == "up" or key == "down" or key == "w" or key == "s" then

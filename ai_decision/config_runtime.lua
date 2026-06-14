@@ -1202,6 +1202,8 @@ function M.mixin(aiClass, shared)
         local preferDeployOrPosition = valueOr(fallbackDoctrine.PREFER_DEPLOY_OR_POSITION, true)
         local rockPenalty = math.max(ZERO, valueOr(fallbackDoctrine.ROCK_ATTACK_PENALTY, 4000))
         local unsupportedPenalty = math.max(ZERO, valueOr(fallbackDoctrine.UNSUPPORTED_NONLETHAL_PENALTY, 6000))
+        local randomActionConfig = self:getRandomActionScoreConfig()
+        local defaultRandomActionConfig = DEFAULT_SCORE_PARAMS.RANDOM_ACTION or {}
         local avoidMoveAttackExposure = options.avoidMoveAttackExposure == true
         local avoidFactionAttacks = options.avoidFactionAttacks == true
 

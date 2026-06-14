@@ -2,6 +2,12 @@ local initialize = {}
 
 require("globals")
 local osLib = require("os")
+local fontCache = require("fontCache")
+local renderingQuality = require("rendering_quality")
+
+local function isMobilePlatform(currentOS)
+    return currentOS == "iOS" or currentOS == "Android"
+end
 
 local function isSteamDeckHardware(currentOS)
     if currentOS == "SteamOS" then
@@ -21,29 +27,48 @@ local function isSteamDeckHardware(currentOS)
     return false
 end
 
+local function applyWindowMode(currentOS, fullscreen)
+    SETTINGS.DISPLAY.FULLSCREEN = fullscreen == true
+    SETTINGS.DISPLAY.RESIZABLE = not SETTINGS.DISPLAY.FULLSCREEN and not isMobilePlatform(currentOS)
+    SETTINGS.DISPLAY.BORDERLESS = SETTINGS.DISPLAY.FULLSCREEN
+
+    return love.window.setMode(SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT, {
+        fullscreen = SETTINGS.DISPLAY.FULLSCREEN,
+        fullscreentype = SETTINGS.DISPLAY.FULLSCREEN_TYPE or "desktop",
+        resizable = SETTINGS.DISPLAY.RESIZABLE,
+        borderless = SETTINGS.DISPLAY.BORDERLESS,
+        vsync = SETTINGS.DISPLAY.VSYNC,
+        display = SETTINGS.DISPLAY.DISPLAY,
+        minwidth = SETTINGS.DISPLAY.MINWIDTH,
+        minheight = SETTINGS.DISPLAY.MINHEIGHT,
+        highdpi = SETTINGS.DISPLAY.HIGHDPI
+    })
+end
+
+local function applyPlatformStartupDisplayMode(currentOS, isSteamDeck)
+    if isMobilePlatform(currentOS) or isSteamDeck or currentOS == "Linux" then
+        return applyWindowMode(currentOS, true)
+    end
+
+    return applyWindowMode(currentOS, false)
+end
+
+function initialize.toggleDesktopDisplayMode(currentOS)
+    currentOS = currentOS or (love and love.system and love.system.getOS and love.system.getOS()) or nil
+    if isMobilePlatform(currentOS) then
+        return false, "display_toggle_unsupported"
+    end
+
+    local nextFullscreen = not (SETTINGS.DISPLAY.FULLSCREEN == true)
+    return applyWindowMode(currentOS, nextFullscreen)
+end
+
 function initialize.enter(stateMachine)
 
     -- Detect the operating system
     local currentOS = love.system.getOS()
     local isSteamDeck = isSteamDeckHardware(currentOS)
-
-    -- On mobile
-    if currentOS == 'iOS' or currentOS == 'Android' then
-
-        -- Fullscreen on mobile
-        SETTINGS.DISPLAY.FULLSCREEN = true
-        SETTINGS.DISPLAY.RESIZABLE = false
-        SETTINGS.DISPLAY.BORDERLESS = true
-    elseif isSteamDeck then
-        SETTINGS.DISPLAY.FULLSCREEN = true
-        SETTINGS.DISPLAY.RESIZABLE = false
-        SETTINGS.DISPLAY.BORDERLESS = true
-    -- On desktop
-    else
-        SETTINGS.DISPLAY.FULLSCREEN = false
-        SETTINGS.DISPLAY.RESIZABLE = true
-        SETTINGS.DISPLAY.BORDERLESS = false
-    end
+    renderingQuality.prepareWindowSettings(currentOS)
 
     -- Reduce logging overhead on Steam Deck hardware to improve frame pacing.
     if isSteamDeck then
@@ -59,33 +84,28 @@ function initialize.enter(stateMachine)
     end
 
     -- Check DPI
-    if love.graphics.getDPIScale() > 1 then
+    if not renderingQuality.isApplePlatform(currentOS) and love.graphics.getDPIScale() > 1 then
         SETTINGS.DISPLAY.HIGHDPI = true
     end
 
-    -- Set the window mode
-    love.window.setMode(SETTINGS.DISPLAY.WIDTH, SETTINGS.DISPLAY.HEIGHT, {
-        fullscreen = SETTINGS.DISPLAY.FULLSCREEN,
-        resizable = SETTINGS.DISPLAY.RESIZABLE,
-        borderless = SETTINGS.DISPLAY.BORDERLESS,
-        vsync = SETTINGS.DISPLAY.VSYNC,
-        display = SETTINGS.DISPLAY.DISPLAY,
-        minwidth = SETTINGS.DISPLAY.MINWIDTH,
-        minheight = SETTINGS.DISPLAY.MINHEIGHT,
-        highdpi = SETTINGS.DISPLAY.HIGHDPI
-    })
+    applyPlatformStartupDisplayMode(currentOS, isSteamDeck)
 
-    love.graphics.setDefaultFilter("nearest", "nearest")
+    renderingQuality.configureGraphics(currentOS)
 
     -- Load custom font
-    local success, customFont = pcall(love.graphics.newFont, "assets/fonts/monogram-extended.ttf", SETTINGS.FONT.DEFAULT_SIZE)
+    local success, customFont = pcall(fontCache.get, "assets/fonts/monogram-extended.ttf", SETTINGS.FONT.DEFAULT_SIZE)
     if success then
         love.graphics.setFont(customFont)
     else
         -- If the custom font fails to load, fall back to the default font
     end
 
-    stateMachine.changeState("mainMenu")
+    local online = GAME and GAME.CURRENT and GAME.CURRENT.ONLINE or nil
+    if online and online.pendingInviteJoinLobbyId then
+        stateMachine.changeState("onlineLobby")
+    else
+        stateMachine.changeState("mainMenu")
+    end
 end
 
 function initialize.update(dt)

@@ -290,6 +290,65 @@ bool SteamBridge::requireInitialized(std::string& reason) const {
     return false;
 }
 
+bool SteamBridge::requestCurrentStats(std::string& reason, int timeoutMs) const {
+    if (!requireInitialized(reason)) {
+        return false;
+    }
+    if (!SteamUserStats()) {
+        reason = "steam_user_stats_unavailable";
+        return false;
+    }
+    if (userStatsReady_ || userStatsRequestInFlight_) {
+        return userStatsReady_;
+    }
+    if (!SteamUser()) {
+        reason = "steam_user_unavailable";
+        return false;
+    }
+
+    const CSteamID localUserId = SteamUser()->GetSteamID();
+    if (!localUserId.IsValid()) {
+        reason = "local_user_missing";
+        return false;
+    }
+
+    userStatsLastReason_.clear();
+    const SteamAPICall_t call = SteamUserStats()->RequestUserStats(localUserId);
+    if (call == k_uAPICallInvalid) {
+        reason = "request_user_stats_failed";
+        return false;
+    }
+
+    userStatsRequestInFlight_ = true;
+    debugLog(debugLogs_, "Steam user stats requested");
+
+    UserStatsReceived_t received {};
+    if (!waitForCallResult(call, received, reason, timeoutMs)) {
+        userStatsRequestInFlight_ = false;
+        userStatsLastReason_ = reason;
+        return false;
+    }
+
+    userStatsRequestInFlight_ = false;
+    if (received.m_eResult != k_EResultOK) {
+        reason = "user_stats_received_failed:" + resultToString(received.m_eResult);
+        userStatsLastReason_ = reason;
+        return false;
+    }
+
+    userStatsReady_ = true;
+    userStatsLastReason_.clear();
+    debugLog(debugLogs_, "Steam user stats ready");
+    return true;
+}
+
+bool SteamBridge::ensureUserStatsReady(std::string& reason, int timeoutMs) const {
+    if (userStatsReady_) {
+        return true;
+    }
+    return requestCurrentStats(reason, timeoutMs);
+}
+
 bool SteamBridge::parseSteamId64(const std::string& value, CSteamID& outId) {
     if (value.empty()) {
         return false;
@@ -469,6 +528,9 @@ bool SteamBridge::init(const SteamInitOptions& options, std::string& reason) {
     }
 
     initialized_ = true;
+    userStatsReady_ = false;
+    userStatsRequestInFlight_ = false;
+    userStatsLastReason_.clear();
     remotePlayDirectInputEnabled_ = false;
     remotePlayCursorAssetsReady_ = false;
     remotePlayHiddenCursorId_ = 0;
@@ -504,6 +566,9 @@ bool SteamBridge::shutdown() {
     remotePlayLightCursor32Id_ = 0;
     remotePlayLightCursor48Id_ = 0;
     remotePlayLightCursor64Id_ = 0;
+    userStatsReady_ = false;
+    userStatsRequestInFlight_ = false;
+    userStatsLastReason_.clear();
     steamInputInitialized_ = false;
     steamInputConfigured_ = false;
     steamInputManifestPath_.clear();
@@ -1079,6 +1144,9 @@ bool SteamBridge::getAchievement(const std::string& achievementId, bool& achieve
         reason = "steam_user_stats_unavailable";
         return false;
     }
+    if (!ensureUserStatsReady(reason)) {
+        return false;
+    }
     if (achievementId.empty()) {
         reason = "achievement_id_missing";
         return false;
@@ -1103,6 +1171,9 @@ bool SteamBridge::setAchievement(const std::string& achievementId, std::string& 
         reason = "steam_user_stats_unavailable";
         return false;
     }
+    if (!ensureUserStatsReady(reason)) {
+        return false;
+    }
     if (achievementId.empty()) {
         reason = "achievement_id_missing";
         return false;
@@ -1121,6 +1192,9 @@ bool SteamBridge::clearAchievement(const std::string& achievementId, std::string
     }
     if (!SteamUserStats()) {
         reason = "steam_user_stats_unavailable";
+        return false;
+    }
+    if (!ensureUserStatsReady(reason)) {
         return false;
     }
     if (achievementId.empty()) {
@@ -1143,6 +1217,9 @@ bool SteamBridge::storeUserStats(std::string& reason) {
         reason = "steam_user_stats_unavailable";
         return false;
     }
+    if (!ensureUserStatsReady(reason)) {
+        return false;
+    }
     if (!SteamUserStats()->StoreStats()) {
         reason = "store_user_stats_failed";
         return false;
@@ -1158,6 +1235,9 @@ bool SteamBridge::getStatInt(const std::string& statId, int32_t& value, std::str
     }
     if (!SteamUserStats()) {
         reason = "steam_user_stats_unavailable";
+        return false;
+    }
+    if (!ensureUserStatsReady(reason)) {
         return false;
     }
     if (statId.empty()) {
@@ -1180,6 +1260,9 @@ bool SteamBridge::setStatInt(const std::string& statId, int32_t value, std::stri
     }
     if (!SteamUserStats()) {
         reason = "steam_user_stats_unavailable";
+        return false;
+    }
+    if (!ensureUserStatsReady(reason)) {
         return false;
     }
     if (statId.empty()) {

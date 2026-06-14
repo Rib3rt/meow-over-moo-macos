@@ -151,6 +151,42 @@ runTest("state_machine_resets_transient_inputs_on_state_change", function()
     assertTrue(content:find("resetTransientInputState()", 1, true) ~= nil, "state change should call transient input reset")
 end)
 
+runTest("touchpress_does_not_forward_to_new_state_after_mouse_transition", function()
+    local content = readFile("stateMachine.lua")
+    assertTrue(type(content) == "string", "stateMachine.lua not readable")
+    assertTrue(content:find("stateBeforeTouchMousepress", 1, true) ~= nil, "touch press must remember the pre-mouse state")
+    assertTrue(content:find("stateNameBeforeTouchMousepress", 1, true) ~= nil, "touch press must remember the pre-mouse state name")
+    assertTrue(content:find("currentState ~= stateBeforeTouchMousepress", 1, true) ~= nil, "touch press must stop if mouse emulation changes state")
+    assertTrue(content:find("return mouseResult", 1, true) ~= nil, "touch press should return the mouse transition result")
+end)
+
+runTest("touch_input_routes_only_through_mouse_handlers", function()
+    local content = readFile("stateMachine.lua")
+    assertTrue(type(content) == "string", "stateMachine.lua not readable")
+    assertTrue(content:find("stateMachine.mousepressed(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())", 1, true) ~= nil, "touch press must route through mousepressed")
+    assertTrue(content:find("stateMachine.mousereleased(screenX, screenY, 1, true, 1, hostKeyboardMouseSource())", 1, true) ~= nil, "touch release must route through mousereleased")
+    assertTrue(content:find("stateBeforeTouchMousepress.touchpressed", 1, true) == nil, "touch press must not also call screen touchpressed")
+    assertTrue(content:find("currentState.touchreleased", 1, true) == nil, "touch release must not also call screen touchreleased")
+end)
+
+runTest("main_ignores_touch_compat_mouse_callbacks", function()
+    local content = readFile("main.lua")
+    assertTrue(type(content) == "string", "main.lua not readable")
+    assertTrue(content:find("function love.mousepressed(x, y, button, istouch, presses)", 1, true) ~= nil, "main mousepressed callback missing")
+    assertTrue(content:find("function love.mousereleased(x, y, button, istouch, presses)", 1, true) ~= nil, "main mousereleased callback missing")
+    assertTrue(content:find("if istouch == true then", 1, true) ~= nil, "touch compatibility mouse callbacks must be ignored")
+end)
+
+runTest("state_machine_blocks_duplicate_pointer_press_after_transition", function()
+    local content = readFile("stateMachine.lua")
+    assertTrue(type(content) == "string", "stateMachine.lua not readable")
+    assertTrue(content:find("pointerPressTransitionBlockActive", 1, true) ~= nil, "pointer transition block flag missing")
+    assertTrue(content:find("beginPointerPressTransitionBlock(button)", 1, true) ~= nil, "mouse state transitions must arm the pointer block")
+    assertTrue(content:find("shouldBlockPointerPress(button)", 1, true) ~= nil, "duplicate pointer presses must be blocked before dispatch")
+    assertTrue(content:find("suppressedTouchReleaseIds[id] = true", 1, true) ~= nil, "suppressed touch presses must suppress their release")
+    assertTrue(content:find("clearPointerPressTransitionBlock()", 1, true) ~= nil, "pointer block must clear on release")
+end)
+
 local passed = 0
 for _, result in ipairs(results) do
     if result.ok then

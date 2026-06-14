@@ -70,8 +70,26 @@ local function refreshDerivedAssignmentState()
     GAME.CURRENT.TURN_ORDER = Factions.getTurnOrder()
 end
 
-VERSION = "1.0.0.1"
-PLATFORM_BUILD_LABEL = "Windows Edition"
+local function detectPlatformBuildLabel()
+    local osName = nil
+    if love and love.system and type(love.system.getOS) == "function" then
+        local ok, resolved = pcall(love.system.getOS)
+        if ok then
+            osName = resolved
+        end
+    end
+
+    if osName == "OS X" or osName == "macOS" then
+        return "macOS Edition"
+    end
+    if osName == "Linux" then
+        return "Linux Edition"
+    end
+    return "Windows Edition"
+end
+
+VERSION = "1.1.1"
+PLATFORM_BUILD_LABEL = detectPlatformBuildLabel()
 SETTINGS = {
     DISPLAY = {
         BORDERLESS = false,
@@ -83,6 +101,7 @@ SETTINGS = {
         VSYNC = 1,
         CENTERED = true,
         DISPLAY = 1,
+        FULLSCREEN_TYPE = "desktop",
         MINWIDTH = 500,
         MINHEIGHT = 325,
         HIGHDPI = false,
@@ -123,8 +142,8 @@ SETTINGS = {
         ENABLE_PROFILING = false,
         OVERLAY_ENABLED = false,
         CAPTURE_ENABLED = false,
-        CAPTURE_PATH = "docs/perf_last_session.csv",
-        SUMMARY_PATH = "docs/perf_last_session_summary.txt",
+        CAPTURE_PATH = "_diagnostics/perf_last_session.csv",
+        SUMMARY_PATH = "_diagnostics/perf_last_session_summary.txt",
         HITCH_THRESHOLD_MS = 33.0,
         DEBUG_CONSOLE_LOG_ENABLED = false,
         LOG_LEVEL = "error",

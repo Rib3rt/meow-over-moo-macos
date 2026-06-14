@@ -2108,9 +2108,6 @@ function uiClass:handlePhaseAdvanceAction()
         return true
     end
 
-    self._lastSetContentMemoKey = contentMemoKey
-    self._lastSetContentTheme = activeTheme
-
     return true
 end
 
@@ -2827,7 +2824,7 @@ function uiClass:drawLogPanel(gameRuler)
     local contentDrawFunc = function(x, y, width, height, colors)
         -- Save current font and set log font
         local defaultFont = love.graphics.getFont()
-        local logFont = getMonogramFont(SETTINGS.FONT.INFO_SIZE)
+        local logFont = getDefaultFont(12)
         love.graphics.setFont(logFont)
         
         -- Draw log entries
@@ -2838,7 +2835,7 @@ function uiClass:drawLogPanel(gameRuler)
             love.graphics.printf("No actions yet", x + 10, y + 40, width - 20, "left")
         else
             -- Display only the first 3 log entries to match the reduced panel height
-            local lineHeight = 18
+            local lineHeight = math.max(18, logFont:getHeight() + 2)
             local maxEntriesToShow = 3
             local entriesToShow = math.min(#gameRuler.turnLog, maxEntriesToShow)
             local contentTopY = y + 40
@@ -3709,8 +3706,9 @@ function uiClass:drawUnitInfoContent(x, y, width, height, unit, player, content,
     end
     
     if needsSmallerFont then
-        local smallFont = getMonogramFont(SETTINGS.FONT.INFO_SIZE)
-        love.graphics.setFont(smallFont)
+        love.graphics.setFont(getDefaultFont(13))
+    else
+        love.graphics.setFont(getDefaultFont(14))
     end
     
     love.graphics.printf(specialAbilities, x + 24, y + 166, textWidth - 30, "left")

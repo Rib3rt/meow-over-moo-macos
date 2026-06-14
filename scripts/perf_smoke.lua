@@ -314,8 +314,10 @@ runTest("perf_capture_exports_csv_and_summary", function()
     setupGlobals()
     makeLoveStub()
 
-    local csvPath = "/tmp/perf_smoke_capture.csv"
-    local summaryPath = "/tmp/perf_smoke_capture_summary.txt"
+    local outputDir = "/tmp/mom_perf_smoke_nested"
+    local csvPath = outputDir .. "/capture/perf_smoke_capture.csv"
+    local summaryPath = outputDir .. "/summary/perf_smoke_capture_summary.txt"
+    os.execute("rm -rf '" .. outputDir .. "'")
     os.remove(csvPath)
     os.remove(summaryPath)
 
@@ -352,8 +354,7 @@ runTest("perf_capture_exports_csv_and_summary", function()
     assertTrue(csvText:find("frame_index", 1, true) ~= nil, "CSV header missing")
     assertTrue(summaryText:find("Perf Session Summary", 1, true) ~= nil, "summary title missing")
 
-    os.remove(csvPath)
-    os.remove(summaryPath)
+    os.execute("rm -rf '" .. outputDir .. "'")
 end)
 
 runTest("perf_capture_defaults_disabled_in_globals", function()

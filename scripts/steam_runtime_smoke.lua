@@ -1363,6 +1363,16 @@ runTest("steam_input_diagnostics_expose_path_and_controller_fields", function()
     end)
 end)
 
+runTest("native_bridge_requests_user_stats_before_stat_access", function()
+    local bridgeContent = readFile("integrations/steam/native/steam_bridge.cpp")
+    local headerContent = readFile("integrations/steam/native/steam_bridge.hpp")
+    assertTrue(type(bridgeContent) == "string", "native bridge source should be readable")
+    assertTrue(type(headerContent) == "string", "native bridge header should be readable")
+    assertTrue(bridgeContent:find("RequestUserStats", 1, true) ~= nil, "native bridge should request Steam user stats")
+    assertTrue(bridgeContent:find("ensureUserStatsReady(reason)", 1, true) ~= nil, "stat and achievement paths should wait for current stats")
+    assertTrue(bridgeContent:find("UserStatsReceived_t", 1, true) ~= nil, "native bridge should validate UserStatsReceived result")
+end)
+
 local passed = 0
 for _, result in ipairs(results) do
     if result.ok then

@@ -89,6 +89,9 @@ local function newSteamRuntimeStub(opts)
             return userId
         end,
         getStatInt = function(id)
+            if opts.statsUnavailable == true then
+                return nil, "steam_user_stats_not_ready"
+            end
             return stats[id]
         end,
         setStatInt = function(id, value)
@@ -207,6 +210,49 @@ runTest("stat_mismatch_invalidates_main_profile", function()
     local profile, source = store.loadProfile()
     assertTrue(source == "repaired_reseed", "stat mismatch should reseed when backup also mismatches")
     assertEqual(math.floor(profile.rating + 0.5), 1200, "reseeded rating should use live stat value")
+end)
+
+runTest("platform_label_change_preserves_signed_profile", function()
+    PLATFORM_BUILD_LABEL = "Windows Edition"
+    local store, files = loadStore({
+        currentRating = 1425,
+        highestRating = 1500,
+        onlineMatchesPlayed = 8,
+        onlineMatchesWon = 5
+    })
+    assertTrue(store.saveProfile(glicko2.newProfile(1425, { games = 8 })) == true, "save should succeed")
+
+    PLATFORM_BUILD_LABEL = "Linux Edition"
+    store = loadStore({
+        files = files,
+        currentRating = 1425,
+        highestRating = 1500,
+        onlineMatchesPlayed = 8,
+        onlineMatchesWon = 5
+    })
+    local profile, source = store.loadProfile()
+    assertEqual(source, "file", "platform label change should not repair or reseed profile")
+    assertEqual(math.floor(profile.rating + 0.5), 1425, "rating should survive platform label change")
+    assertEqual(profile.games, 8, "match count should survive platform label change")
+end)
+
+runTest("valid_profile_loads_when_live_stats_are_not_ready", function()
+    local store, files = loadStore({
+        currentRating = 1360,
+        highestRating = 1400,
+        onlineMatchesPlayed = 6,
+        onlineMatchesWon = 2
+    })
+    assertTrue(store.saveProfile(glicko2.newProfile(1360, { games = 6 })) == true, "save should succeed")
+
+    store = loadStore({
+        files = files,
+        statsUnavailable = true
+    })
+    local profile, source = store.loadProfile()
+    assertEqual(source, "file", "unready Steam stats should not invalidate signed local profile")
+    assertEqual(math.floor(profile.rating + 0.5), 1360, "rating should survive while Steam stats are unavailable")
+    assertEqual(profile.games, 6, "match count should survive while Steam stats are unavailable")
 end)
 
 runTest("corrupted_main_profile_restores_from_backup", function()

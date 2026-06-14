@@ -70,93 +70,9 @@ local function getRedistributableRoot(opts)
     return "integrations/steam/redist"
 end
 
-local function detectPlatform()
-    if love and love.system and type(love.system.getOS) == "function" then
-        local okOs, osName = pcall(love.system.getOS)
-        if okOs and type(osName) == "string" and osName ~= "" then
-            if osName == "OS X" or osName == "macOS" then
-                return "macOS"
-            end
-            return osName
-        end
-    end
-
-    local pathSep = package and package.config and package.config:sub(1, 1) or "/"
-    if pathSep == "\\" then
-        return "Windows"
-    end
-    return "Linux"
-end
-
-local function collectSearchRoots(opts)
+local function collectDependencyCandidatePaths(opts, fileName)
     local redistributableRoot = getRedistributableRoot(opts)
     local root = resolveSourceRoot()
-    local roots = {}
-    local seen = {}
-
-    local function add(path)
-        path = normalizePath(path)
-        if not path or seen[path] then
-            return
-        end
-        seen[path] = true
-        roots[#roots + 1] = path
-    end
-
-    local relativeRoots = {
-        ".",
-        "./integrations/steam/redist",
-        "./integrations/steam/redist/linux64",
-        "./integrations/steam/redist/win64",
-        "./integrations/steam/redist/macos",
-        "./integrations/steam/native",
-        "./" .. redistributableRoot,
-        "./" .. redistributableRoot .. "/linux64",
-        "./" .. redistributableRoot .. "/win64",
-        "./" .. redistributableRoot .. "/macos",
-        "./../Resources",
-        "./../Resources/integrations/steam/redist",
-        "./../Resources/integrations/steam/redist/macos",
-        "./../Resources/" .. redistributableRoot,
-        "./../Resources/" .. redistributableRoot .. "/macos"
-    }
-
-    for _, basePath in ipairs(relativeRoots) do
-        add(basePath)
-    end
-
-    if root then
-        local absoluteRoots = {
-            root,
-            root .. "/integrations/steam/redist",
-            root .. "/integrations/steam/redist/linux64",
-            root .. "/integrations/steam/redist/win64",
-            root .. "/integrations/steam/redist/macos",
-            root .. "/integrations/steam/native",
-            root .. "/" .. redistributableRoot,
-            root .. "/" .. redistributableRoot .. "/linux64",
-            root .. "/" .. redistributableRoot .. "/win64",
-            root .. "/" .. redistributableRoot .. "/macos"
-        }
-
-        for _, basePath in ipairs(absoluteRoots) do
-            add(basePath)
-        end
-
-        if root:match("/Contents/MacOS/?$") then
-            local resourceRoot = root:gsub("/Contents/MacOS/?$", "/Contents/Resources")
-            add(resourceRoot)
-            add(resourceRoot .. "/integrations/steam/redist")
-            add(resourceRoot .. "/integrations/steam/redist/macos")
-            add(resourceRoot .. "/" .. redistributableRoot)
-            add(resourceRoot .. "/" .. redistributableRoot .. "/macos")
-        end
-    end
-
-    return roots
-end
-
-local function collectDependencyCandidatePaths(opts, fileName)
     local candidates = {}
     local seen = {}
 
@@ -169,69 +85,67 @@ local function collectDependencyCandidatePaths(opts, fileName)
         candidates[#candidates + 1] = path
     end
 
-    for _, basePath in ipairs(collectSearchRoots(opts)) do
+    local relativeRoots = {
+        ".",
+        "./integrations/steam/redist/win64",
+        "./" .. redistributableRoot .. "/win64",
+        "./integrations/steam/redist",
+        "./" .. redistributableRoot
+    }
+
+    for _, basePath in ipairs(relativeRoots) do
         add(basePath .. "/" .. fileName)
+    end
+
+    if root then
+        local absoluteRoots = {
+            root,
+            root .. "/integrations/steam/redist/win64",
+            root .. "/" .. redistributableRoot .. "/win64",
+            root .. "/integrations/steam/redist",
+            root .. "/" .. redistributableRoot
+        }
+
+        for _, basePath in ipairs(absoluteRoots) do
+            add(basePath .. "/" .. fileName)
+        end
     end
 
     return candidates
 end
 
-local function preloadDependencyFromCandidates(fileName, opts, globalMode)
+local function preloadWindowsDependencies(opts)
+    if dependencyPreloadAttempted then
+        return
+    end
+    dependencyPreloadAttempted = true
+
+    local pathSep = package and package.config and package.config:sub(1, 1) or "/"
+    if pathSep ~= "\\" then
+        return
+    end
+
     local okFfi, ffi = pcall(require, "ffi")
     if not okFfi or not ffi then
         dependencyPreloadSummary = "ffi_unavailable"
         return
     end
 
-    local candidates = collectDependencyCandidatePaths(opts, fileName)
+    local dep = "steam_api64.dll"
+    local candidates = collectDependencyCandidatePaths(opts, dep)
     for _, candidate in ipairs(candidates) do
         if fileExists(candidate) then
-            local okLoad, loadResult
-            if globalMode == true then
-                okLoad, loadResult = pcall(ffi.load, candidate, true)
-            else
-                okLoad, loadResult = pcall(ffi.load, candidate)
-            end
+            local okLoad, loadResult = pcall(ffi.load, candidate)
             if okLoad and loadResult then
-                dependencyPreloadSummary = fileName .. "=" .. tostring(candidate)
+                dependencyPreloadSummary = dep .. "=" .. tostring(candidate)
                 return
             end
-            dependencyPreloadSummary = fileName .. " load failed: " .. tostring(loadResult)
+            dependencyPreloadSummary = dep .. " load failed: " .. tostring(loadResult)
             return
         end
     end
 
-    dependencyPreloadSummary = fileName .. " not found in expected paths"
-end
-
-local function preloadWindowsDependencies(opts)
-    preloadDependencyFromCandidates("steam_api64.dll", opts, false)
-end
-
-local function preloadLinuxDependencies(opts)
-    preloadDependencyFromCandidates("libsteam_api.so", opts, true)
-end
-
-local function preloadMacDependencies(opts)
-    preloadDependencyFromCandidates("libsteam_api.dylib", opts, true)
-end
-
-local function preloadPlatformDependencies(opts)
-    if dependencyPreloadAttempted then
-        return
-    end
-    dependencyPreloadAttempted = true
-
-    local platform = detectPlatform()
-    if platform == "Windows" then
-        preloadWindowsDependencies(opts)
-        return
-    end
-    if platform == "macOS" then
-        preloadMacDependencies(opts)
-        return
-    end
-    preloadLinuxDependencies(opts)
+    dependencyPreloadSummary = dep .. " not found in expected paths"
 end
 
 local function configureNativeSearchPath(opts)
@@ -240,10 +154,41 @@ local function configureNativeSearchPath(opts)
     end
     cpathConfigured = true
 
-    for _, basePath in ipairs(collectSearchRoots(opts)) do
+    local redistributableRoot = getRedistributableRoot(opts)
+
+    local root = resolveSourceRoot()
+    local relativeRoots = {
+        ".",
+        "./integrations/steam/redist",
+        "./integrations/steam/redist/linux64",
+        "./integrations/steam/redist/win64",
+        "./integrations/steam/native",
+        "./" .. redistributableRoot,
+        "./" .. redistributableRoot .. "/linux64",
+        "./" .. redistributableRoot .. "/win64"
+    }
+
+    for _, basePath in ipairs(relativeRoots) do
         appendPackageCPath(basePath .. "/?.so")
         appendPackageCPath(basePath .. "/?.dll")
-        appendPackageCPath(basePath .. "/?.dylib")
+    end
+
+    if root then
+        local absoluteRoots = {
+            root,
+            root .. "/integrations/steam/redist",
+            root .. "/integrations/steam/redist/linux64",
+            root .. "/integrations/steam/redist/win64",
+            root .. "/integrations/steam/native",
+            root .. "/" .. redistributableRoot,
+            root .. "/" .. redistributableRoot .. "/linux64",
+            root .. "/" .. redistributableRoot .. "/win64"
+        }
+
+        for _, basePath in ipairs(absoluteRoots) do
+            appendPackageCPath(basePath .. "/?.so")
+            appendPackageCPath(basePath .. "/?.dll")
+        end
     end
 end
 
@@ -276,7 +221,7 @@ local function ensureNativeLoaded(opts)
     end
 
     configureNativeSearchPath(opts)
-    preloadPlatformDependencies(opts)
+    preloadWindowsDependencies(opts)
 
     local ok, loaded = pcall(require, NATIVE_MODULE_NAME)
     if not ok then
